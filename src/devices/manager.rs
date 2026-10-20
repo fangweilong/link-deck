@@ -65,25 +65,25 @@ impl DeviceManager {
             // Initial detection
             let mut current = Vec::new();
             if let Some(d) = rk.detect() {
-                current.push(d);
+                push_unique(&mut current, d);
             }
             if let Some(d) = mouse.detect() {
-                current.push(d);
+                push_unique(&mut current, d);
             }
             for bt_dev in BluetoothBatteryScanner::scan_devices() {
-                current.push(bt_dev);
+                push_unique(&mut current, bt_dev);
             }
             for hid_dev in StandardHidBatteryDriver::scan_devices() {
-                current.push(hid_dev);
+                push_unique(&mut current, hid_dev);
             }
             for logi_dev in LogitechDriver::scan_devices() {
-                current.push(logi_dev);
+                push_unique(&mut current, logi_dev);
             }
             for mchose_dev in MchoseDriver::scan_devices() {
-                current.push(mchose_dev);
+                push_unique(&mut current, mchose_dev);
             }
             for vxe_dev in VxeDriver::scan_devices() {
-                current.push(vxe_dev);
+                push_unique(&mut current, vxe_dev);
             }
             *devices_arc.write().unwrap() = current;
 
@@ -241,27 +241,34 @@ impl DeviceManager {
         let mut updated = Vec::new();
 
         if let Some(d) = rk.detect() {
-            updated.push(d);
+            push_unique(&mut updated, d);
         }
         if let Some(d) = mouse.detect() {
-            updated.push(d);
+            push_unique(&mut updated, d);
         }
         for bt_dev in BluetoothBatteryScanner::scan_devices() {
-            updated.push(bt_dev);
+            push_unique(&mut updated, bt_dev);
         }
         for hid_dev in StandardHidBatteryDriver::scan_devices() {
-            updated.push(hid_dev);
+            push_unique(&mut updated, hid_dev);
         }
         for logi_dev in LogitechDriver::scan_devices() {
-            updated.push(logi_dev);
+            push_unique(&mut updated, logi_dev);
         }
         for mchose_dev in MchoseDriver::scan_devices() {
-            updated.push(mchose_dev);
+            push_unique(&mut updated, mchose_dev);
         }
         for vxe_dev in VxeDriver::scan_devices() {
-            updated.push(vxe_dev);
+            push_unique(&mut updated, vxe_dev);
         }
+
         *self.devices.write().unwrap() = updated;
+    }
+}
+
+fn push_unique(list: &mut Vec<DeviceSnapshot>, dev: DeviceSnapshot) {
+    if !list.iter().any(|d| d.id == dev.id || (!dev.path.is_empty() && d.path == dev.path)) {
+        list.push(dev);
     }
 }
 

@@ -8,6 +8,12 @@ pub const RK_COMPX_VID2: u16 = 0x3554;
 pub const RK_VENDOR_VID: u16 = 0x258A;
 pub const RK_SONIX_VID: u16 = 0x0C45;
 
+pub fn is_rk_keyboard_vid(vid: u16) -> bool {
+    matches!(
+        vid,
+        0x25A7 | 0x3554 | 0x258A | 0x0C45 | 0x2F24 | 0x320F | 0x341A | 0x0416
+    )
+}
 pub struct RkKeyboardDriver {
     pub info: Option<HidDeviceInfo>,
 }
@@ -22,7 +28,7 @@ impl RkKeyboardDriver {
 
         // 1. Look for Compx 2.4G Receiver collection (UsagePage 0xFF02, Usage 2, Feat 8)
         let compx_dev = devices.iter().find(|d| {
-            (d.vendor_id == RK_COMPX_VID || d.vendor_id == RK_COMPX_VID2)
+            is_rk_keyboard_vid(d.vendor_id)
                 && d.usage_page == 0xFF02
                 && d.usage == 0x0002
                 && d.feature_len >= 8
@@ -50,7 +56,7 @@ impl RkKeyboardDriver {
 
         // 2. Look for RK Wired / Other mode (VID 0x258A, 0x0C45, or Compx wired)
         let rk_wired = devices.iter().find(|d| {
-            (d.vendor_id == RK_VENDOR_VID || d.vendor_id == RK_SONIX_VID || d.vendor_id == RK_COMPX_VID || d.vendor_id == RK_COMPX_VID2)
+            is_rk_keyboard_vid(d.vendor_id)
                 && ((d.usage_page == 0xFF02 && d.usage == 0x0002)
                     || (d.usage_page == 0xFF00 && d.usage == 0x0001))
                 && d.product_id != RK_COMPX_PID
@@ -90,7 +96,7 @@ impl RkKeyboardDriver {
         // First, check if a wired RK keyboard is plugged into PC USB directly
         let devices = enumerate_hid_devices();
         let rk_wired = devices.iter().find(|d| {
-            (d.vendor_id == RK_VENDOR_VID || d.vendor_id == RK_SONIX_VID || d.vendor_id == RK_COMPX_VID || d.vendor_id == RK_COMPX_VID2)
+            is_rk_keyboard_vid(d.vendor_id)
                 && ((d.usage_page == 0xFF02 && d.usage == 0x0002)
                     || (d.usage_page == 0xFF00 && d.usage == 0x0001))
                 && d.product_id != RK_COMPX_PID

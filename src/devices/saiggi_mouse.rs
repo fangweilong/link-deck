@@ -8,7 +8,11 @@ use std::time::{Duration, SystemTime};
 pub const XENTA_VID: u16 = 0x1D57;
 pub const ARESON_VID: u16 = 0x24AE;
 pub const PIXART_VID: u16 = 0x093A;
+pub const COMPX_MOUSE_VID: u16 = 0x25A7;
 
+pub fn is_areson_mouse_vid(vid: u16) -> bool {
+    matches!(vid, XENTA_VID | ARESON_VID | PIXART_VID | COMPX_MOUSE_VID)
+}
 pub const ARESON_PID_WIRELESS: u16 = 0xFA60;
 pub const ARESON_PID_WIRED: u16 = 0xFA61;
 
@@ -41,7 +45,7 @@ impl SaiggiMouseDriver {
 
         // 1. Prefer wired mouse if plugged in (PID 0xFA61)
         let col03_wired = devices.iter().find(|d| {
-            (d.vendor_id == XENTA_SAIGGI_VID || d.vendor_id == ARESON_VID || d.vendor_id == PIXART_VID)
+            is_areson_mouse_vid(d.vendor_id)
                 && d.product_id == SAIGGI_PID_WIRED
                 && d.usage_page == 0x000A
                 && d.usage == 0x0000
@@ -50,7 +54,7 @@ impl SaiggiMouseDriver {
         // 2. Otherwise fall back to wireless receiver (PID 0xFA60) or any other compatible VID/PID
         let col03 = col03_wired.or_else(|| {
             devices.iter().find(|d| {
-                (d.vendor_id == XENTA_SAIGGI_VID || d.vendor_id == ARESON_VID || d.vendor_id == PIXART_VID)
+                is_areson_mouse_vid(d.vendor_id)
                     && d.usage_page == 0x000A
                     && d.usage == 0x0000
             })

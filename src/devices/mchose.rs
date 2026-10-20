@@ -17,7 +17,7 @@ impl MchoseDriver {
             .iter()
             .filter(|d| {
                 (d.vendor_id == MCHOSE_VID_1 || d.vendor_id == MCHOSE_VID_2 || d.vendor_id == MCHOSE_VID_3)
-                    && (d.feature_len >= 20 || d.feature_len == 65)
+                    && (d.feature_len >= 20 || d.output_len >= 20 || d.input_len >= 20)
             })
             .collect();
 
@@ -33,27 +33,27 @@ impl MchoseDriver {
     }
 
     fn query_device(dev_info: &HidDeviceInfo) -> Option<DeviceSnapshot> {
-        let dev = HidDevice::open(dev_info.clone(), false).ok()?;
+        let dev = HidDevice::open(dev_info.clone(), true).ok()?;
+        let timeout = Duration::from_millis(60);
 
-        // Send Feature Report 0x11, Command 0x06 (Basic Info: Battery & Charging)
-        // Protocol specification: bytes are XOR'd with 0xFF
-        let mut req = [0xFFu8; 20];
-        req[0] = 0x11;
-        req[1] = 0x06 ^ 0xFF; // 0xF9
+        // Protocol 1: Legacy Protocol (Feature Report 0x11, Command 0x06, XOR 0xFF)
+        // Used by: MCHOSE A5 Pro, AX5 Pro, G3, A7, L7, M7
+        let mut req_legacy = [0xFFu8; 20];
+        req_legacy[0] = 0x11;
+        req_legacy[1] = 0x06 ^ 0xFF; // 0xF9
 
-        let _ = dev.set_feature(&req);
-        std::thread::sleep(Duration::from_millis(30));
+        let _ = dev.set_feature(&req_legacy);
+        std::thread::sleep(Duration::from_millis(25));
 
-        let mut resp = [0xFFu8; 20];
-        resp[0] = 0x11;
+        let mut resp_legacy = [0xFFu8; 20];
+        resp_legacy[0] = 0x11;
 
-        if dev.get_feature(&mut resp).is_ok() {
-            // Check if echoed command matches 0x06 (decoded)
-            let echoed_cmd = resp[1] ^ 0xFF;
+        if dev.get_feature(&mut resp_legacy).is_ok() {
+            let echoed_cmd = resp_legacy[1] ^ 0xFF;
             if echoed_cmd == 0x06 {
-                let conn_mode_raw = resp[7] ^ 0xFF;
-                let pct = (resp[8] ^ 0xFF).min(100);
-                let charging_raw = resp[9] ^ 0xFF;
+                let conn_mode_raw = resp_legacy[7] ^ 0xFF;
+                let pct = (resp_legacy[8] ^ 0xFF).min(100);
+                let charging_raw = resp_legacy[9] ^ 0xFF;
 
                 let charging = charging_raw == 1;
                 let conn_mode = match conn_mode_raw & 0x07 {
@@ -73,7 +73,7 @@ impl MchoseDriver {
                     product_id: dev_info.product_id,
                     connection: conn_mode,
                     battery: BatteryState {
-                        percentage: if pct > 0 { Some(pct) } else { None },
+                        percentage: if pct > 0 && pct <= 100 { Some(pct) } else { None },
                         voltage_mv: None,
                         charging,
                         charging_source: if charging { ChargingSource::Charging } else { ChargingSource::None },
@@ -83,6 +83,61 @@ impl MchoseDriver {
                     path: dev_info.path.clone(),
                 });
             }
+        }
+
+        // Protocol 2: Modern Protocol (Report 0x4D, Command 0x0900: Basic Info & Battery)
+        // Used by: MCHOSE A5 V3, A7 V3, G3 V3, K7 V2, R7, V7
+        let mut req_modern = [0u8; 64];
+        req_modern[0] = 0x4D; // Report ID
+        req_modern[1] = 0x01;
+        req_modern[2] = 0x01; // Flags
+        req_modern[3] = 0x00; // Payload length
+        req_modern[4] = 0x00; // Command ID lo (0x0900)
+        req_modern[5] = 0x09; // Command ID hi
+        req_modern[6] = 0x00; // BizCode
+        req_modern[7] = 0x00; // Sequence
+        // Checksum: XOR over b[2..8]
+        req_modern[8] = req_modern[2] ^ req_modern[3] ^ req_modern[4] ^ req_modern[5] ^ req_modern[6] ^ req_modern[7];
+
+        let _ = dev.write_report(&req_modern);
+
+        let mut resp_modern = [0u8; 64];
+        resp_modern[0] = 0x4D;
+
+        if dev.read_report(&mut resp_modern, timeout).is_ok()
+            && resp_modern[0] == 0x4D
+            && resp_modern[4] == 0x00
+            && resp_modern[5] == 0x09
+        {
+            let pct = resp_modern[12].min(100);
+            let charging = resp_modern[13] == 1;
+            let conn_mode_raw = resp_modern[14];
+            let conn_mode = match conn_mode_raw & 0x07 {
+                0 => ConnectionMode::Wired,
+                2 => ConnectionMode::Bluetooth,
+                _ => ConnectionMode::Wireless24G,
+            };
+
+            let hw_name = dev.get_product_string();
+            let name = lookup_mchose_name(dev_info.product_id, hw_name.as_deref());
+
+            return Some(DeviceSnapshot {
+                id: format!("mchose_{:04x}", dev_info.product_id),
+                name,
+                kind: DeviceKind::Mouse,
+                vendor_id: dev_info.vendor_id,
+                product_id: dev_info.product_id,
+                connection: conn_mode,
+                battery: BatteryState {
+                    percentage: if pct > 0 && pct <= 100 { Some(pct) } else { None },
+                    voltage_mv: None,
+                    charging,
+                    charging_source: if charging { ChargingSource::Charging } else { ChargingSource::None },
+                    online: true,
+                    last_updated: SystemTime::now(),
+                },
+                path: dev_info.path.clone(),
+            });
         }
 
         None
@@ -95,6 +150,7 @@ pub fn lookup_mchose_name(pid: u16, hw_name: Option<&str>) -> String {
         if !trimmed.is_empty()
             && !trimmed.eq_ignore_ascii_case("USB Input Device")
             && !trimmed.eq_ignore_ascii_case("HID-compliant device")
+            && !trimmed.eq_ignore_ascii_case("2.4G Wireless Receiver")
         {
             return format!("迈从 {}", trimmed);
         }
@@ -106,7 +162,7 @@ pub fn lookup_mchose_name(pid: u16, hw_name: Option<&str>) -> String {
         0xF018 | 0xF019 => "迈从 MCHOSE A5 Pro Max 无线鼠标".to_string(),
         0xF023 | 0xF024 | 0xF025 | 0xF026 => "迈从 MCHOSE AX5 Pro 无线鼠标".to_string(),
         0xF021 | 0xF022 => "迈从 MCHOSE AX5 Pro Max 无线鼠标".to_string(),
-        _ => format!("迈从 MCHOSE 无线鼠标 (0x{:04X})", pid),
+        _ => format!("迈从 MCHOSE 鼠标 (0x{:04X})", pid),
     }
 }
 
