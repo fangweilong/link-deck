@@ -17,7 +17,7 @@ use windows_sys::Win32::Foundation::{
     INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, ReadFile, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    CreateFileW, ReadFile, WriteFile, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Threading::{
     CreateEventW, ResetEvent, WaitForSingleObject,
@@ -196,7 +196,7 @@ impl HidDevice {
         let flags = if overlapped { FILE_FLAG_OVERLAPPED } else { 0 };
 
         unsafe {
-            let handle = CreateFileW(
+            let mut handle = CreateFileW(
                 wide_path.as_ptr(),
                 GENERIC_READ | GENERIC_WRITE,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -205,6 +205,22 @@ impl HidDevice {
                 flags,
                 ptr::null_mut(),
             );
+
+            // If access denied (e.g. system keyboard/mouse collection), fallback to query access (0)
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE as _ {
+                let err = GetLastError();
+                if err == 5 { // ERROR_ACCESS_DENIED
+                    handle = CreateFileW(
+                        wide_path.as_ptr(),
+                        0,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        ptr::null(),
+                        OPEN_EXISTING,
+                        flags,
+                        ptr::null_mut(),
+                    );
+                }
+            }
 
             if handle.is_null() || handle == INVALID_HANDLE_VALUE as _ {
                 return Err(format!("Failed to open HID device: {}", GetLastError()));
@@ -251,6 +267,51 @@ impl HidDevice {
             } else {
                 Err(format!("HidD_GetInputReport failed: {}", GetLastError()))
             }
+        }
+    }
+
+    pub fn write_report(&self, buf: &[u8]) -> Result<(), String> {
+        unsafe {
+            let mut bytes_written = 0u32;
+            if WriteFile(
+                self.handle,
+                buf.as_ptr(),
+                buf.len() as u32,
+                &mut bytes_written,
+                ptr::null_mut(),
+            ) != 0 && bytes_written > 0 {
+                return Ok(());
+            }
+
+            if HidD_SetOutputReport(self.handle, buf.as_ptr() as *mut c_void, buf.len() as u32) != 0 {
+                return Ok(());
+            }
+
+            if HidD_SetFeature(self.handle, buf.as_ptr() as *mut c_void, buf.len() as u32) != 0 {
+                return Ok(());
+            }
+
+            Err(format!("write_report failed: {}", GetLastError()))
+        }
+    }
+
+    pub fn read_report(&self, buf: &mut [u8], timeout: Duration) -> Result<usize, String> {
+        if let Ok(n) = self.read_overlapped(buf, timeout) {
+            if n > 0 {
+                return Ok(n);
+            }
+        }
+
+        unsafe {
+            if HidD_GetInputReport(self.handle, buf.as_mut_ptr() as *mut c_void, buf.len() as u32) != 0 {
+                return Ok(buf.len());
+            }
+
+            if HidD_GetFeature(self.handle, buf.as_mut_ptr() as *mut c_void, buf.len() as u32) != 0 {
+                return Ok(buf.len());
+            }
+
+            Err(format!("read_report failed: {}", GetLastError()))
         }
     }
 
