@@ -5,6 +5,7 @@ use crate::devices::rk_keyboard::RkKeyboardDriver;
 use crate::devices::saiggi_mouse::SaiggiMouseDriver;
 use crate::devices::standard_hid::StandardHidBatteryDriver;
 use crate::devices::vxe::VxeDriver;
+use crate::devices::razer::RazerDriver;
 use crate::devices::types::DeviceSnapshot;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -85,6 +86,9 @@ impl DeviceManager {
             for vxe_dev in VxeDriver::scan_devices() {
                 push_unique(&mut current, vxe_dev);
             }
+            for razer_dev in RazerDriver::scan_devices() {
+                push_unique(&mut current, razer_dev);
+            }
             *devices_arc.write().unwrap() = current;
 
             while running.load(Ordering::SeqCst) {
@@ -99,6 +103,7 @@ impl DeviceManager {
                 let logi_devices = LogitechDriver::scan_devices();
                 let mchose_devices = MchoseDriver::scan_devices();
                 let vxe_devices = VxeDriver::scan_devices();
+                let razer_devices = RazerDriver::scan_devices();
                 {
                     let mut list = devices_arc.write().unwrap();
                     let mut found_rk = false;
@@ -206,6 +211,15 @@ impl DeviceManager {
                             list.push(vxe_dev);
                         }
                     }
+
+                    // Sync Razer devices
+                    for razer_dev in razer_devices {
+                        if let Some(existing) = list.iter_mut().find(|d| d.id == razer_dev.id) {
+                            existing.battery = razer_dev.battery;
+                        } else {
+                            list.push(razer_dev);
+                        }
+                    }
                 }
                 let target_ms = poll_interval.load(Ordering::Relaxed).max(500);
                 let slice = 100u64;
@@ -260,6 +274,9 @@ impl DeviceManager {
         }
         for vxe_dev in VxeDriver::scan_devices() {
             push_unique(&mut updated, vxe_dev);
+        }
+        for razer_dev in RazerDriver::scan_devices() {
+            push_unique(&mut updated, razer_dev);
         }
 
         *self.devices.write().unwrap() = updated;

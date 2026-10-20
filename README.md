@@ -46,10 +46,15 @@
 - **协议原理 (双代协议全面适配)**：
   - **一代 Nordic 52840 (17字节 0x08 0x04 协议)**：覆盖绝大多数主流无线鼠（VXE R1、VGN F1/F2、MAD R、ATK F1 等），自动提取电量百分比、有线状态及电池毫伏值。
   - **二代 Nordic 54L15 (64字节 0x72 0x07 8K协议)**：适配 ATK Zero 等新一代 8K 旗舰无线鼠标及其 8K 专用 Dongle。
-### 6. Windows 标准通用 HID 电量外设规范 (Standard HID Power)
+### 6. 雷蛇 Razer Hyperspeed 全系无线电竞鼠标 (2.4G 无线 / USB 有线)
+- **支持品牌/型号**：毒蝰 Viper V2 Pro / V3 Pro / Ultimate、炼狱蝰蛇 DeathAdder V2 Pro / V3 Pro / HyperSpeed、巴塞利斯蛇 Basilisk V3 Pro / Ultimate、眼镜蛇 Cobra Pro、那伽梵蛇 Naga Pro / V2、八岐大蛇 Orochi V2 等。
+- **协议原理**：
+  - 基于官方 OpenRazer 90 字节 Class `0x07` 报文体系，通过 `CMD 0x80` 与 `CMD 0x84` 读取电量百分比与实时充电状态。
+
+### 7. Windows 标准通用 HID 电量外设规范 (Standard HID Power)
 - **支持设备**：实现了 Windows 官方标准 HID 电池规范（UsagePage `0x0084` / `0x0085`）的第三方外设。
 
-### 7. Windows 原生蓝牙设备电量服务 (Bluetooth Battery)
+### 8. Windows 原生蓝牙设备电量服务 (Bluetooth Battery)
 - **支持设备**：蓝牙无线耳机、AirPods、Sony、Bose、蓝牙双模鼠标、蓝牙键盘、Xbox 蓝牙手柄等。
 - **协议原理**：
   - 通过 Win32 PnP 属性引擎直连 Windows 蓝牙内核栈：

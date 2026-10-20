@@ -141,10 +141,13 @@ fn main() {
         println!("5. 赛技 Saiggi / Xenta / Areson 双模无线鼠标 (2.4G 无线 / 有线)");
         println!("   - 协议原理: Xenta COL03 Report 0x03 心跳探针与电量异步捕获");
         println!("   - 典型设备: 赛技 TM015、Areson 方案、凌阳方案等无线鼠标");
-        println!("6. Windows 标准通用 HID 电量外设规范 (Standard HID Power)");
+        println!("6. 雷蛇 Razer Hyperspeed 全系无线电竞鼠标 (2.4G 无线 / 有线)");
+        println!("   - 协议原理: OpenRazer 90字节 Class 0x07 标准报文双向校验 (CMD 0x80 电量 / CMD 0x84 充电)");
+        println!("   - 典型设备: 毒蝰 Viper V2/V3 Pro、炼狱蝰蛇 DeathAdder V2/V3 Pro、巴塞利斯蛇 Basilisk 系列、眼镜蛇 Cobra Pro、八岐大蛇 Orochi 等");
+        println!("7. Windows 标准通用 HID 电量外设规范 (Standard HID Power)");
         println!("   - 协议原理: UsagePage 0x0084 (Power Device) / 0x0085 (Battery System)");
         println!("   - 典型设备: 实现了 Windows 官方标准 HID 电池规范的第三方外设");
-        println!("7. Windows 原生蓝牙 GATT 规范 (全品牌通用)");
+        println!("8. Windows 原生蓝牙 GATT 规范 (全品牌通用)");
         println!("   - 协议原理: Bluetooth SIG 统一 Battery Service 0x180F 及 HFP 音频协议");
         println!("   - 典型设备: 任何品牌走蓝牙连接电脑的鼠标、键盘、无线耳机 (AirPods/Sony等)、手柄");
         println!("{:-<70}", "");

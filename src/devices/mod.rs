@@ -7,6 +7,7 @@ pub mod standard_hid;
 pub mod logitech;
 pub mod mchose;
 pub mod vxe;
+pub mod razer;
 pub mod types;
 
 pub use manager::DeviceManager;
