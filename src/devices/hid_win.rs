@@ -9,8 +9,8 @@ use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
 };
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{
     HidD_FreePreparsedData, HidD_GetAttributes, HidD_GetFeature, HidD_GetHidGuid,
-    HidD_GetManufacturerString, HidD_GetPreparsedData, HidD_GetProductString,
-    HidD_SetFeature, HidP_GetCaps, HIDD_ATTRIBUTES, HIDP_CAPS,
+    HidD_GetInputReport, HidD_GetManufacturerString, HidD_GetPreparsedData, HidD_GetProductString,
+    HidD_SetFeature, HidD_SetOutputReport, HidP_GetCaps, HIDD_ATTRIBUTES, HIDP_CAPS,
 };
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_IO_PENDING, GENERIC_READ, GENERIC_WRITE, HANDLE,
@@ -231,6 +231,25 @@ impl HidDevice {
                 Ok(())
             } else {
                 Err(format!("HidD_SetFeature failed: {}", GetLastError()))
+            }
+        }
+    }
+    pub fn set_output_report(&self, buf: &[u8]) -> Result<(), String> {
+        unsafe {
+            if HidD_SetOutputReport(self.handle, buf.as_ptr() as *mut c_void, buf.len() as u32) != 0 {
+                Ok(())
+            } else {
+                Err(format!("HidD_SetOutputReport failed: {}", GetLastError()))
+            }
+        }
+    }
+
+    pub fn get_input_report(&self, buf: &mut [u8]) -> Result<(), String> {
+        unsafe {
+            if HidD_GetInputReport(self.handle, buf.as_mut_ptr() as *mut c_void, buf.len() as u32) != 0 {
+                Ok(())
+            } else {
+                Err(format!("HidD_GetInputReport failed: {}", GetLastError()))
             }
         }
     }

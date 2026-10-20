@@ -28,13 +28,34 @@
     - `buf[4]`：电量档位（1..10，换算 10%~100%）
   - 自动处理无线鼠标深度休眠，鼠标轻触/移动时毫秒级唤醒捕获。
 
-### 3. Windows 原生蓝牙设备电量服务 (Bluetooth Battery)
-- **支持设备**：蓝牙无线耳机（实测直连用户已连接的 `P6`）、AirPods、Sony、Bose、蓝牙双模鼠标、蓝牙键盘、Xbox 蓝牙手柄等。
+### 3. 罗技 Logitech Lightspeed / Unifying 全系 (2.4G 无线 / USB 有线)
+- **支持品牌/型号**：GPW 狗屁王 1/2/3 代、G502 Lightspeed、G304、G703、G903、G913/G915 键盘、MX Master 3/3S 等支持 Lightspeed / Unifying / Bolt 接收器的外设。
+- **协议原理**：
+  - 基于罗技官方 **HID++ 2.0 / 4.0** 规范（Vendor Collection `0xFF00` / `0xFF43`）。
+  - 自动向接收器查询 Root Feature `0x0000` 并解析 `0x1004` (Unified Battery) 与 `0x1000` (Battery Status)。
+  - 精确读取当前电量百分比（0%~100%）与充电充能状态。
+
+### 4. 迈从 MCHOSE 全系电竞无线鼠标 (2.4G 无线 / USB 有线)
+- **支持品牌/型号**：迈从 A5 / A5 Pro / A5 Pro Max、AX5 / AX5 Pro / AX5 Pro Max、G3 系列、A7 / A7 Ultra、L7、M7 等全系 MCHOSE 鼠标。
+- **协议原理**：
+  - 基于 M-HUB 专有端点 Feature Report `0x11`（XOR 0xFF 双向掩码校验）。
+  - 发送指令 `0x06` 直连读取当前电池百分比、物理充电状态以及当前连接模式（2.4G / 有线 / 蓝牙）。
+
+### 5. VXE / VGN / Kysona 系列电竞无线鼠标 (2.4G 无线 / USB 有线)
+- **支持品牌/型号**：VXE 蜻蜓 R1 / R1 Pro / R1 SE、VGN 蜻蜓 F1 系列、Kysona M600 等。
+- **协议原理**：
+  - 采用 Linux 内核级 Kysona / Compx 驱动通讯协议（Report ID `0x08` 指令 `0x04`）。
+  - 实时解析电池容量百分比、充电指示以及高精度硬件电压（mV）。
+
+### 6. Windows 标准通用 HID 电量外设规范 (Standard HID Power)
+- **支持设备**：实现了 Windows 官方标准 HID 电池规范（UsagePage `0x0084` / `0x0085`）的第三方外设。
+
+### 7. Windows 原生蓝牙设备电量服务 (Bluetooth Battery)
+- **支持设备**：蓝牙无线耳机、AirPods、Sony、Bose、蓝牙双模鼠标、蓝牙键盘、Xbox 蓝牙手柄等。
 - **协议原理**：
   - 通过 Win32 PnP 属性引擎直连 Windows 蓝牙内核栈：
     `DEVPKEY_Device_BatteryLevel` (`{104EA319-6EE2-4701-BD47-8DDBF425BBE5}, 2`)
-  - 自动识别设备类别（耳机 🎧、键鼠 ⌨️🖱️、游戏手柄 🎮），无缝接入管理。
-
+  - 严谨校验 `DEVPKEY_Device_IsConnected`，严格过滤断开连接的历史残留缓存，杜绝离线幽灵显示。
 ---
 
 ## 💻 界面交互设计
@@ -57,11 +78,17 @@
 
 ## 🛠️ 构建与运行
 
-### 查看连接设备状态 (命令行模式)
+### 命令行常用指令
 ```powershell
-cargo run --release -- --status
-```
+# 1. 查看当前已扫描并连接的外设电量状态
+link-deck.exe --status
 
+# 2. 查看已支持的私有协议与硬件支持库清单
+link-deck.exe --protocols
+
+# 3. 诊断探测当前电脑插入的所有底层 HID 设备 (用于未识别设备适配)
+link-deck.exe --scan-all
+```
 ### 启动常驻程序
 ```powershell
 cargo run --release

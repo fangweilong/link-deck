@@ -117,6 +117,64 @@ fn main() {
         println!("{:-<70}", "");
         return;
     }
+    if args.iter().any(|a| a == "--protocols" || a == "--supported") {
+        unsafe {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+        println!("====================================================");
+        println!("     LinkDeck 已支持的外设私有协议与硬件支持库     ");
+        println!("====================================================");
+        println!("1. 罗技 Logitech Lightspeed / Unifying 全系 (2.4G 无线 / 有线)");
+        println!("   - 协议原理: 官方 HID++ 2.0 / 4.0 (Unified Battery 0x1004 / BatteryStatus 0x1000)");
+        println!("   - 典型设备: GPW 狗屁王 1/2/3 代、G502 Lightspeed、G304、G903、G913/G915 键盘、MX Master 系列等");
+        println!("2. RK / Compx 方案三模机械键盘 (2.4G 无线 / USB 有线)");
+        println!("   - 协议原理: Compx 接收器 UsagePage 0xFF02 Report 0x06 (硬件毫伏直读)");
+        println!("   - 典型设备: RK108、F75、F99、M75、R75、S98、RK100、RK87、RK84、RK68 等全系 Compx 方案键盘");
+        println!("3. 迈从 MCHOSE 全系电竞无线鼠标 (2.4G 无线 / 有线)");
+        println!("   - 协议原理: M-HUB 专有 Feature Report 0x11 指令 0x06 (XOR 0xFF 掩码通信)");
+        println!("   - 典型设备: 迈从 A5 / A5 Pro / A5 Pro Max、AX5 / AX5 Pro、G3、A7 Ultra、L7、M7 等");
+        println!("4. VXE / VGN / Kysona 系列电竞无线鼠标 (2.4G 无线 / 有线)");
+        println!("   - 协议原理: Linux 内核级 Kysona / Compx 专有 Report 0x08 指令 0x04");
+        println!("   - 典型设备: VXE 蜻蜓 R1 / R1 Pro / R1 SE、VGN 蜻蜓 F1 系列、Kysona M600 等");
+        println!("5. 赛技 Saiggi / Xenta / Areson 双模无线鼠标 (2.4G 无线 / 有线)");
+        println!("   - 协议原理: Xenta COL03 Report 0x03 心跳探针与电量异步捕获");
+        println!("   - 典型设备: 赛技 TM015、Areson 方案、凌阳方案等无线鼠标");
+        println!("6. Windows 标准通用 HID 电量外设规范 (Standard HID Power)");
+        println!("   - 协议原理: UsagePage 0x0084 (Power Device) / 0x0085 (Battery System)");
+        println!("   - 典型设备: 实现了 Windows 官方标准 HID 电池规范的第三方外设");
+        println!("7. Windows 原生蓝牙 GATT 规范 (全品牌通用)");
+        println!("   - 协议原理: Bluetooth SIG 统一 Battery Service 0x180F 及 HFP 音频协议");
+        println!("   - 典型设备: 任何品牌走蓝牙连接电脑的鼠标、键盘、无线耳机 (AirPods/Sony等)、手柄");
+        println!("{:-<70}", "");
+        return;
+    }
+
+    if args.iter().any(|a| a == "--scan-all" || a == "--list-hid") {
+        unsafe {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+        println!("====================================================");
+        println!("     LinkDeck 全系统已插入 HID 设备诊断探测器     ");
+        println!("====================================================");
+        let raw_devs = devices::hid_win::enumerate_hid_devices();
+        println!("检测到底层 HID 设备接口共 {} 个:", raw_devs.len());
+        println!("{:-<70}", "");
+        for (i, d) in raw_devs.iter().enumerate() {
+            let hw_name = devices::hid_win::HidDevice::open(d.clone(), false)
+                .ok()
+                .and_then(|h| h.get_product_string())
+                .unwrap_or_else(|| "N/A".to_string());
+            println!(
+                "[{:02}] VID: 0x{:04X} | PID: 0x{:04X} | UsagePage: 0x{:04X} | Usage: 0x{:04X}",
+                i + 1, d.vendor_id, d.product_id, d.usage_page, d.usage
+            );
+            println!("     设备名: {} | FeatureLen: {} | OutputLen: {}", hw_name, d.feature_len, d.output_len);
+            println!("     系统路径: {}", d.path);
+        }
+        println!("{:-<70}", "");
+        println!("* 若你的设备尚未被自动识别，请将上述输出反馈给我们以快速适配！");
+        return;
+    }
 
     // Single-instance check: ensure only one LinkDeck process runs at a time
     let mutex_name: Vec<u16> = "Local\\LinkDeck_SingleInstance_Mutex\0".encode_utf16().collect();

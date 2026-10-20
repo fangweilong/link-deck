@@ -340,14 +340,31 @@ unsafe extern "system" fn panel_wnd_proc(
             }
 
             if devices.is_empty() {
-                SetTextColor(mem_dc, CLR_MUTED);
+                SetTextColor(mem_dc, CLR_TEXT);
+                let font_empty_title = create_clear_font((14.0 * font_scale).round() as i32, true);
+                let old_empty_f = SelectObject(mem_dc, font_empty_title);
                 let mut emp_rect = RECT {
                     left: 20,
-                    top: 140,
+                    top: 125,
                     right: width - 20,
-                    bottom: 180,
+                    bottom: 152,
                 };
-                draw_text_clean(mem_dc, "正在扫描已连接的键盘、鼠标和蓝牙设备...", &mut emp_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+                draw_text_clean(mem_dc, "未检测到已适配的 2.4G 外设或蓝牙设备", &mut emp_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+                SelectObject(mem_dc, old_empty_f);
+                DeleteObject(font_empty_title);
+
+                SetTextColor(mem_dc, CLR_MUTED);
+                let font_empty_tip = create_clear_font((11.5 * font_scale).round() as i32, false);
+                let old_tip_f = SelectObject(mem_dc, font_empty_tip);
+                let mut emp_tip_rect = RECT {
+                    left: 20,
+                    top: 156,
+                    right: width - 20,
+                    bottom: 220,
+                };
+                draw_text_clean(mem_dc, "已适配: 罗技 Lightspeed/GPW · RK 键盘 · 迈从/VXE 鼠标 · 赛技 · 全系蓝牙\n提示: 多模外设切至蓝牙模式可直接读取；终端运行 --protocols 查看完整清单", &mut emp_tip_rect, DT_CENTER);
+                SelectObject(mem_dc, old_tip_f);
+                DeleteObject(font_empty_tip);
             }
 
             // Polling Interval Selector Row (at height - 124 .. height - 98)

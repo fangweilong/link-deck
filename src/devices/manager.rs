@@ -1,7 +1,10 @@
 use crate::devices::bluetooth::BluetoothBatteryScanner;
+use crate::devices::logitech::LogitechDriver;
+use crate::devices::mchose::MchoseDriver;
 use crate::devices::rk_keyboard::RkKeyboardDriver;
 use crate::devices::saiggi_mouse::SaiggiMouseDriver;
 use crate::devices::standard_hid::StandardHidBatteryDriver;
+use crate::devices::vxe::VxeDriver;
 use crate::devices::types::DeviceSnapshot;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -73,6 +76,15 @@ impl DeviceManager {
             for hid_dev in StandardHidBatteryDriver::scan_devices() {
                 current.push(hid_dev);
             }
+            for logi_dev in LogitechDriver::scan_devices() {
+                current.push(logi_dev);
+            }
+            for mchose_dev in MchoseDriver::scan_devices() {
+                current.push(mchose_dev);
+            }
+            for vxe_dev in VxeDriver::scan_devices() {
+                current.push(vxe_dev);
+            }
             *devices_arc.write().unwrap() = current;
 
             while running.load(Ordering::SeqCst) {
@@ -84,7 +96,9 @@ impl DeviceManager {
 
                 // Poll Bluetooth devices
                 let bt_devices = BluetoothBatteryScanner::scan_devices();
-
+                let logi_devices = LogitechDriver::scan_devices();
+                let mchose_devices = MchoseDriver::scan_devices();
+                let vxe_devices = VxeDriver::scan_devices();
                 {
                     let mut list = devices_arc.write().unwrap();
                     let mut found_rk = false;
@@ -165,6 +179,33 @@ impl DeviceManager {
                             list.push(bt_dev);
                         }
                     }
+
+                    // Sync Logitech devices
+                    for logi_dev in logi_devices {
+                        if let Some(existing) = list.iter_mut().find(|d| d.id == logi_dev.id) {
+                            existing.battery = logi_dev.battery;
+                        } else {
+                            list.push(logi_dev);
+                        }
+                    }
+
+                    // Sync MCHOSE devices
+                    for mchose_dev in mchose_devices {
+                        if let Some(existing) = list.iter_mut().find(|d| d.id == mchose_dev.id) {
+                            existing.battery = mchose_dev.battery;
+                        } else {
+                            list.push(mchose_dev);
+                        }
+                    }
+
+                    // Sync VXE / VGN devices
+                    for vxe_dev in vxe_devices {
+                        if let Some(existing) = list.iter_mut().find(|d| d.id == vxe_dev.id) {
+                            existing.battery = vxe_dev.battery;
+                        } else {
+                            list.push(vxe_dev);
+                        }
+                    }
                 }
                 let target_ms = poll_interval.load(Ordering::Relaxed).max(500);
                 let slice = 100u64;
@@ -211,7 +252,15 @@ impl DeviceManager {
         for hid_dev in StandardHidBatteryDriver::scan_devices() {
             updated.push(hid_dev);
         }
-
+        for logi_dev in LogitechDriver::scan_devices() {
+            updated.push(logi_dev);
+        }
+        for mchose_dev in MchoseDriver::scan_devices() {
+            updated.push(mchose_dev);
+        }
+        for vxe_dev in VxeDriver::scan_devices() {
+            updated.push(vxe_dev);
+        }
         *self.devices.write().unwrap() = updated;
     }
 }
