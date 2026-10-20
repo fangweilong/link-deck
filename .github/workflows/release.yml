@@ -1,4 +1,4 @@
-name: Release
+name: Build & Release
 
 on:
   push:
@@ -11,11 +11,32 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Build & Release Binary
+    name: Build & Release (main branch only)
     runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main branch
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+              echo "✗ Error: Manual trigger must run on the main branch!"
+              exit 1
+            fi
+            echo "✓ Verified: Manual run on main branch."
+          else
+            git fetch origin main:refs/remotes/origin/main
+            if git merge-base --is-ancestor HEAD origin/main; then
+              echo "✓ Verified: Tag ${{ github.ref_name }} is on main branch."
+            else
+              echo "✗ Error: Tag ${{ github.ref_name }} is NOT on main branch! Build aborted."
+              exit 1
+            fi
+          fi
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -31,7 +52,15 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: link-deck-${{ github.ref_name }}
+          path: target/release/link-deck.exe
+          if-no-files-found: error
+
       - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: target/release/link-deck.exe
