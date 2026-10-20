@@ -17,17 +17,35 @@ use ui::tray::{
     IDM_POLL_1500, IDM_POLL_3000, IDM_POLL_10000, IDM_POLL_30000, IDM_REFRESH, IDM_SHOW_PANEL,
     IDM_TOGGLE_BALL, WM_TRAY_CALLBACK,
 };
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT, WPARAM,
+};
 use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
+use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SetTimer, TranslateMessage, MSG, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
-    WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW,
+    AllowSetForegroundWindow, ASFW_ANY, CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW,
+    GetMessageW, GetWindowThreadProcessId, IsIconic, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SetForegroundWindow, SetTimer, ShowWindow, TranslateMessage, MSG,
+    SW_RESTORE, SW_SHOW, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER,
+    WNDCLASSEXW,
 };
+pub const WM_LINKDECK_ACTIVATE: u32 = WM_APP + 102;
+
+struct SingleInstanceGuard(HANDLE);
+
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() && self.0 != -1isize as HANDLE {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+}
 
 static mut APP_INSTANCE: Option<Arc<Mutex<AppCore>>> = None;
 
@@ -100,6 +118,57 @@ fn main() {
         return;
     }
 
+    // Single-instance check: ensure only one LinkDeck process runs at a time
+    let mutex_name: Vec<u16> = "Local\\LinkDeck_SingleInstance_Mutex\0".encode_utf16().collect();
+    let single_instance_mutex = unsafe { CreateMutexW(ptr::null(), 1, mutex_name.as_ptr()) };
+    if !single_instance_mutex.is_null() && unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        // Another instance is already running!
+        // Notify the existing instance to display its control panel and bring to foreground.
+        let host_class: Vec<u16> = "LinkDeck_HiddenHost\0".encode_utf16().collect();
+        let mut existing_host = unsafe { FindWindowW(host_class.as_ptr(), ptr::null()) };
+
+        // If the first instance is still initializing its window, retry briefly
+        for _ in 0..10 {
+            if !existing_host.is_null() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            existing_host = unsafe { FindWindowW(host_class.as_ptr(), ptr::null()) };
+        }
+
+        if !existing_host.is_null() {
+            let mut pid: u32 = 0;
+            unsafe {
+                GetWindowThreadProcessId(existing_host, &mut pid);
+                if pid != 0 {
+                    AllowSetForegroundWindow(pid);
+                } else {
+                    AllowSetForegroundWindow(ASFW_ANY);
+                }
+                PostMessageW(existing_host, WM_LINKDECK_ACTIVATE, 0, 0);
+            }
+        }
+
+        let panel_class: Vec<u16> = "LinkDeck_ManagementPanel\0".encode_utf16().collect();
+        let existing_panel = unsafe { FindWindowW(panel_class.as_ptr(), ptr::null()) };
+        if !existing_panel.is_null() {
+            unsafe {
+                if IsIconic(existing_panel) != 0 {
+                    ShowWindow(existing_panel, SW_RESTORE);
+                } else {
+                    ShowWindow(existing_panel, SW_SHOW);
+                }
+                SetForegroundWindow(existing_panel);
+            }
+        }
+
+        unsafe {
+            CloseHandle(single_instance_mutex);
+        }
+        return;
+    }
+
+    let _instance_guard = SingleInstanceGuard(single_instance_mutex);
     let config = AppConfig::load();
     let initial_ball_enabled = config.enable_floating_ball;
     let initial_font_scale = config.font_scale;
@@ -386,10 +455,59 @@ unsafe extern "system" fn host_wnd_proc(
             }
             0
         }
+        WM_LINKDECK_ACTIVATE => {
+            if let Some(app_arc) = &APP_INSTANCE {
+                let app = app_arc.lock().unwrap();
+                let snaps = app.manager.get_snapshots();
+                let ball_on = app.config.enable_floating_ball;
+                let font_scale = app.config.font_scale;
+                let poll_ms = app.config.poll_interval_ms;
+                if let Some(panel) = &app.panel {
+                    panel.update_devices(&snaps, ball_on, font_scale, poll_ms);
+                    panel.show();
+                }
+            }
+            0
+        }
         WM_DESTROY => {
             PostQuitMessage(0);
             0
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_single_instance_mutex_lifecycle() {
+        let test_name: Vec<u16> = "Local\\LinkDeck_Test_SingleInstance_Lifecycle\0"
+            .encode_utf16()
+            .collect();
+        let m1 = unsafe { CreateMutexW(ptr::null(), 1, test_name.as_ptr()) };
+        assert!(!m1.is_null());
+        let err1 = unsafe { GetLastError() };
+        assert_ne!(err1, ERROR_ALREADY_EXISTS);
+
+        // Second call with same name should detect already exists
+        let m2 = unsafe { CreateMutexW(ptr::null(), 1, test_name.as_ptr()) };
+        assert!(!m2.is_null());
+        let err2 = unsafe { GetLastError() };
+        assert_eq!(err2, ERROR_ALREADY_EXISTS);
+
+        // Close second handle
+        unsafe { CloseHandle(m2) };
+
+        // Close first handle
+        unsafe { CloseHandle(m1) };
+
+        // Third call should succeed anew
+        let m3 = unsafe { CreateMutexW(ptr::null(), 1, test_name.as_ptr()) };
+        assert!(!m3.is_null());
+        let err3 = unsafe { GetLastError() };
+        assert_ne!(err3, ERROR_ALREADY_EXISTS);
+        unsafe { CloseHandle(m3) };
     }
 }

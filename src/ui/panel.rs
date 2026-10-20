@@ -17,8 +17,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
     GetMessageW, GetSystemMetrics, GetWindowTextW, IsDialogMessageW, LoadCursorW, PostMessageW,
     RegisterClassExW, SendMessageW, SetForegroundWindow, SetWindowTextW, ShowWindow, TranslateMessage,
-    CS_HREDRAW, CS_VREDRAW, ES_AUTOHSCROLL, ICON_BIG, ICON_SMALL, IDC_ARROW, SM_CXSCREEN,
-    SM_CYSCREEN, SW_HIDE, SW_SHOW, WM_CLOSE, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC,
+    CS_HREDRAW, CS_VREDRAW, ES_AUTOHSCROLL, ICON_BIG, ICON_SMALL, IDC_ARROW, IsIconic, SM_CXSCREEN,
+    SM_CYSCREEN, SW_HIDE, SW_RESTORE, SW_SHOW, WM_CLOSE, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC,
     WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETFONT, WM_SETICON,
     WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
@@ -156,7 +156,11 @@ impl PanelWindow {
                 let mut state = state_arc.lock().unwrap();
                 state.visible = true;
             }
-            ShowWindow(self.hwnd, SW_SHOW);
+            if IsIconic(self.hwnd) != 0 {
+                ShowWindow(self.hwnd, SW_RESTORE);
+            } else {
+                ShowWindow(self.hwnd, SW_SHOW);
+            }
             SetForegroundWindow(self.hwnd);
         }
     }
