@@ -1,3 +1,10 @@
+//! ==============================================================================
+//! 厂商模块: 华硕 ROG (玩家国度) / TUF Gaming
+//! 协议类型: Armoury Crate (奥创) 私有 2.4G 无线 / USB 有线专有协议
+//! 通信机制: 64字节 Feature Report (鼠标 0x1207 / 键盘 0x1201)，支持 Omni 统一接收器
+//! 代表设备: 龙鳞 Ace (Harpe Ace)、月刃 (Keris)、战刃 (Gladius III)、夜魔 (Azoth)、魔导士 (Falchion) 等
+//! ==============================================================================
+
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};
 use crate::devices::types::{BatteryState, ChargingSource, ConnectionMode, DeviceKind, DeviceSnapshot};
 use std::time::{Duration, SystemTime};

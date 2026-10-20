@@ -1,3 +1,10 @@
+//! ==============================================================================
+//! 厂商模块: VXE / VGN / ATK / 达尔优 / 造品 / Scyrox
+//! 协议类型: Nordic 52840 (第1代) 与 Nordic 54L15 (第2代 8K) 双代无线协议
+//! 通信机制: 1代 17字节 0x08/0x04 报文；2代 64字节 0x72/0x07 8K 报文与电量解析
+//! 代表设备: VXE 蜻蜓 R1 系列、VGN 蜻蜓 F1/F2 系列、VXE MAD R、ATK F1/A9/Zero 系列等
+//! ==============================================================================
+
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};
 use crate::devices::types::{BatteryState, ChargingSource, ConnectionMode, DeviceKind, DeviceSnapshot};
 use std::time::{Duration, SystemTime};

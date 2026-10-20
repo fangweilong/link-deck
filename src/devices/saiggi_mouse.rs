@@ -1,3 +1,10 @@
+//! ==============================================================================
+//! 厂商模块: 赛技 (Saiggi) / Xenta / Areson 双模无线电竞鼠标
+//! 协议类型: Areson / Xenta 无线接收器协议与凌阳/原相方案
+//! 通信机制: COL03 Feature Ping 主动硬件探活 (39ms)、运动中断包实时侦听、15s 静默待机自适应判定
+//! 代表设备: 赛技 TM015、Areson 方案、凌阳方案等无线双模鼠标
+//! ==============================================================================
+
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};
 use crate::devices::types::{BatteryState, ChargingSource, ConnectionMode, DeviceKind, DeviceSnapshot};
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -1,3 +1,10 @@
+//! ==============================================================================
+//! 厂商模块: 雷蛇 (Razer)
+//! 协议类型: Razer HyperSpeed 2.4G 无线 / USB 有线专有协议
+//! 通信机制: OpenRazer 90字节 Class 0x07 标准双向报文 (CMD 0x80 电量 / CMD 0x84 充电)
+//! 代表设备: 毒蝰 (Viper) 系列、炼狱蝰蛇 (DeathAdder) 系列、巴塞利斯蛇 (Basilisk) 系列、眼镜蛇 (Cobra Pro) 等
+//! ==============================================================================
+
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};
 use crate::devices::types::{BatteryState, ChargingSource, ConnectionMode, DeviceKind, DeviceSnapshot};
 use std::time::{Duration, SystemTime};

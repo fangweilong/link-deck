@@ -1,3 +1,10 @@
+//! ==============================================================================
+//! 厂商模块: 赛睿 (SteelSeries)
+//! 协议类型: SteelSeries Engine 2.4G 无线 / USB 有线专有协议
+//! 通信机制: 报文指令 0xD2/0x92 (Aerox/Prime 鼠标电量)、0xAA (Rival 650)、0x0618 (Arctis 耳机)
+//! 代表设备: Aerox 3/5/9 Wireless、Prime Wireless、Rival 650、Apex Pro 无线键盘、Arctis 7/9/Pro/Nova 耳机
+//! ==============================================================================
+
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};
 use crate::devices::types::{BatteryState, ChargingSource, ConnectionMode, DeviceKind, DeviceSnapshot};
 use std::time::{Duration, SystemTime};

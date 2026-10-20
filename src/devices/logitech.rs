@@ -1,3 +1,10 @@
+//! ==============================================================================
+//! 厂商模块: 罗技 (Logitech / Logitech G)
+//! 协议类型: 官方 HID++ 2.0 / 1.0 双协议 (Lightspeed 2.4G 无线 / 优联 / Bolt / USB 有线)
+//! 通信机制: Feature 0x1004 (Unified Battery) 与 Feature 0x1000 (Battery Status) 探针
+//! 代表设备: GPW 狗屁王 1/2/3 代、G502、G304、G903、G913/G915 键盘、MX Master 3/3S 等
+//! ==============================================================================
+
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};
 use crate::devices::types::{BatteryState, ChargingSource, ConnectionMode, DeviceKind, DeviceSnapshot};
 use std::time::{Duration, SystemTime};

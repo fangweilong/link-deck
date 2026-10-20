@@ -1,3 +1,10 @@
+//! ==============================================================================
+//! 通用模块: Windows 原生全品牌蓝牙电池服务 (Bluetooth SIG)
+//! 协议类型: Bluetooth Low Energy (BLE) GATT Battery Service 规范
+//! 通信机制: DEVPKEY_Device_BatteryLevel ({104EA319-6EE2-4701-BD47-8DDBF425BBE5}, 2)
+//! 代表设备: HHKB、Leopold、Filco 圣手三代、Keychron (蓝牙模式)、AirPods、Sony耳机、Xbox手柄等
+//! ==============================================================================
+
 use crate::devices::types::{BatteryState, ConnectionMode, DeviceKind, DeviceSnapshot};
 use std::mem;
 use std::ptr;
