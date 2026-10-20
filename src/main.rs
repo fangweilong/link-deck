@@ -364,11 +364,7 @@ unsafe extern "system" fn host_wnd_proc(
                 let (dev_id, new_name) = *Box::from_raw(ptr);
                 if let Some(app_arc) = &APP_INSTANCE {
                     let mut app = app_arc.lock().unwrap();
-                    if new_name.trim().is_empty() {
-                        app.config.device_aliases.remove(&dev_id);
-                    } else {
-                        app.config.device_aliases.insert(dev_id.clone(), new_name.trim().to_string());
-                    }
+                    app.config.set_alias(&dev_id, &new_name);
                     let _ = app.config.save();
                     app.manager.set_aliases(app.config.device_aliases.clone());
 

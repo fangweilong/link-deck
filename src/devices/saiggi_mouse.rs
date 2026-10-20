@@ -5,12 +5,17 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
-pub const XENTA_SAIGGI_VID: u16 = 0x1D57;
+pub const XENTA_VID: u16 = 0x1D57;
 pub const ARESON_VID: u16 = 0x24AE;
 pub const PIXART_VID: u16 = 0x093A;
 
-pub const SAIGGI_PID_WIRELESS: u16 = 0xFA60;
-pub const SAIGGI_PID_WIRED: u16 = 0xFA61;
+pub const ARESON_PID_WIRELESS: u16 = 0xFA60;
+pub const ARESON_PID_WIRED: u16 = 0xFA61;
+
+// Backward-compatible aliases
+pub const XENTA_SAIGGI_VID: u16 = XENTA_VID;
+pub const SAIGGI_PID_WIRELESS: u16 = ARESON_PID_WIRELESS;
+pub const SAIGGI_PID_WIRED: u16 = ARESON_PID_WIRED;
 
 pub struct SaiggiMouseDriver {
     pub col03_info: Option<HidDeviceInfo>,
@@ -83,27 +88,7 @@ impl SaiggiMouseDriver {
                 ConnectionMode::Wired
             };
             let hw_name = HidDevice::open(c03.clone(), false).ok().and_then(|h| h.get_product_string());
-            let mouse_name = if let Some(hw) = hw_name {
-                if !hw.trim().is_empty() && !hw.eq_ignore_ascii_case("USB Input Device") {
-                    hw.trim().to_string()
-                } else if c03.product_id == SAIGGI_PID_WIRELESS || c03.product_id == SAIGGI_PID_WIRED {
-                    if conn == ConnectionMode::Wired {
-                        "赛技 TM015 双模鼠标 (有线充电模式)".to_string()
-                    } else {
-                        "赛技 TM015 双模无线鼠标".to_string()
-                    }
-                } else {
-                    format!("无线双模鼠标 (VID 0x{:04X} : PID 0x{:04X})", c03.vendor_id, c03.product_id)
-                }
-            } else if c03.product_id == SAIGGI_PID_WIRELESS || c03.product_id == SAIGGI_PID_WIRED {
-                if conn == ConnectionMode::Wired {
-                    "赛技 TM015 双模鼠标 (有线充电模式)".to_string()
-                } else {
-                    "赛技 TM015 双模无线鼠标".to_string()
-                }
-            } else {
-                format!("无线双模鼠标 (VID 0x{:04X} : PID 0x{:04X})", c03.vendor_id, c03.product_id)
-            };
+            let mouse_name = lookup_mouse_model(c03.vendor_id, c03.product_id, hw_name.as_deref());
             // Start background listener
             self.ensure_worker_running();
 
@@ -276,13 +261,37 @@ pub fn parse_mouse_battery_report(buf: &[u8], is_wired: bool) -> Option<BatteryS
     })
 }
 
+/// Resolve the display name of a mouse given its vendor ID, product ID, and optional hardware string.
+pub fn lookup_mouse_model(vid: u16, pid: u16, hw_name: Option<&str>) -> String {
+    if let Some(hw) = hw_name {
+        let trimmed = hw.trim();
+        if !trimmed.is_empty()
+            && !trimmed.eq_ignore_ascii_case("USB Input Device")
+            && !trimmed.eq_ignore_ascii_case("HID-compliant device")
+            && !trimmed.eq_ignore_ascii_case("USB-HID")
+        {
+            return trimmed.to_string();
+        }
+    }
+
+    match (vid, pid) {
+        (XENTA_VID, ARESON_PID_WIRELESS) | (XENTA_VID, ARESON_PID_WIRED) => {
+            "Areson / Xenta 方案双模鼠标".to_string()
+        }
+        (XENTA_VID, _) => "Xenta 方案无线鼠标".to_string(),
+        (ARESON_VID, _) => "Areson 方案无线鼠标".to_string(),
+        (PIXART_VID, _) => "PixArt 方案无线鼠标".to_string(),
+        _ => format!("通用 HID 无线鼠标 (VID 0x{:04X} : PID 0x{:04X})", vid, pid),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_parse_mouse_battery_report_discharging() {
-        // Raw buffer captured from live TM015 mouse when discharging at 90%:
+        // Raw buffer captured from live Areson / Xenta protocol mouse when discharging at 90%:
         let buf = [0x03, 0x10, 0x40, 0x01, 0x09];
         let state = parse_mouse_battery_report(&buf, false).expect("should parse");
         assert_eq!(state.percentage, Some(90));
@@ -305,6 +314,33 @@ mod tests {
         let state = parse_mouse_battery_report(&buf, true).expect("should parse");
         assert!(state.charging);
         assert_eq!(state.charging_source, ChargingSource::Charging);
+    }
+
+    #[test]
+    fn test_lookup_mouse_model_hw_name_priority() {
+        let name = lookup_mouse_model(XENTA_SAIGGI_VID, SAIGGI_PID_WIRELESS, Some("Custom Gaming Mouse"));
+        assert_eq!(name, "Custom Gaming Mouse");
+    }
+
+    #[test]
+    fn test_lookup_mouse_model_ignores_generic_hw_names() {
+        let name = lookup_mouse_model(XENTA_VID, ARESON_PID_WIRELESS, Some("USB Input Device"));
+        assert_eq!(name, "Areson / Xenta 方案双模鼠标");
+
+        let name_hid = lookup_mouse_model(XENTA_VID, ARESON_PID_WIRED, Some("HID-compliant device"));
+        assert_eq!(name_hid, "Areson / Xenta 方案双模鼠标");
+    }
+
+    #[test]
+    fn test_lookup_mouse_model_fallbacks() {
+        let areson = lookup_mouse_model(ARESON_VID, 0x1234, None);
+        assert_eq!(areson, "Areson 方案无线鼠标");
+
+        let pixart = lookup_mouse_model(PIXART_VID, 0x5678, None);
+        assert_eq!(pixart, "PixArt 方案无线鼠标");
+
+        let unknown = lookup_mouse_model(0x9999, 0x8888, None);
+        assert_eq!(unknown, "通用 HID 无线鼠标 (VID 0x9999 : PID 0x8888)");
     }
 }
 

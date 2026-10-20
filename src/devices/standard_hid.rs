@@ -19,9 +19,11 @@ impl StandardHidBatteryDriver {
                     if dev.get_feature(&mut buf).is_ok() {
                         let pct = buf[1].min(100);
                         let id = format!("hid_std_{:04x}_{:04x}", dev_info.vendor_id, dev_info.product_id);
+                        let hw_name = dev.get_product_string();
+                        let name = lookup_standard_hid_name(dev_info.product_id, hw_name.as_deref());
                         results.push(DeviceSnapshot {
                             id,
-                            name: format!("HID 标准外设 (0x{:04X})", dev_info.product_id),
+                            name,
                             kind: DeviceKind::Other,
                             vendor_id: dev_info.vendor_id,
                             product_id: dev_info.product_id,
@@ -42,5 +44,36 @@ impl StandardHidBatteryDriver {
         }
 
         results
+    }
+}
+
+pub fn lookup_standard_hid_name(product_id: u16, hw_name: Option<&str>) -> String {
+    if let Some(hw) = hw_name {
+        let trimmed = hw.trim();
+        if !trimmed.is_empty()
+            && !trimmed.eq_ignore_ascii_case("USB Input Device")
+            && !trimmed.eq_ignore_ascii_case("HID-compliant device")
+            && !trimmed.eq_ignore_ascii_case("USB-HID")
+        {
+            return trimmed.to_string();
+        }
+    }
+    format!("HID 标准外设 (0x{:04X})", product_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lookup_standard_hid_name() {
+        let real = lookup_standard_hid_name(0x1234, Some("Logitech G304"));
+        assert_eq!(real, "Logitech G304");
+
+        let generic = lookup_standard_hid_name(0x1234, Some("USB Input Device"));
+        assert_eq!(generic, "HID 标准外设 (0x1234)");
+
+        let none = lookup_standard_hid_name(0x5678, None);
+        assert_eq!(none, "HID 标准外设 (0x5678)");
     }
 }

@@ -107,6 +107,54 @@ impl AppConfig {
     pub fn get_alias<'a>(&'a self, device_id: &str) -> Option<&'a str> {
         self.device_aliases.get(device_id).map(|s| s.as_str())
     }
+
+    pub fn set_alias(&mut self, device_id: &str, name: &str) {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            self.device_aliases.remove(device_id);
+            if device_id == "mouse_1d57_fa60" {
+                self.device_aliases.remove("mouse_1d57_fa61");
+            } else if device_id == "mouse_1d57_fa61" {
+                self.device_aliases.remove("mouse_1d57_fa60");
+            }
+        } else {
+            self.device_aliases.insert(device_id.to_string(), trimmed.to_string());
+            if device_id == "mouse_1d57_fa60" {
+                self.device_aliases.insert("mouse_1d57_fa61".to_string(), trimmed.to_string());
+            } else if device_id == "mouse_1d57_fa61" {
+                self.device_aliases.insert("mouse_1d57_fa60".to_string(), trimmed.to_string());
+            }
+        }
+    }
+
+    pub fn resolve_alias<'a>(&'a self, device_id: &str) -> Option<&'a str> {
+        if let Some(alias) = self.device_aliases.get(device_id) {
+            if !alias.trim().is_empty() {
+                return Some(alias.trim());
+            }
+        }
+        if device_id == "mouse_1d57_fa60" {
+            if let Some(alias) = self.device_aliases.get("mouse_1d57_fa61") {
+                if !alias.trim().is_empty() {
+                    return Some(alias.trim());
+                }
+            }
+        } else if device_id == "mouse_1d57_fa61" {
+            if let Some(alias) = self.device_aliases.get("mouse_1d57_fa60") {
+                if !alias.trim().is_empty() {
+                    return Some(alias.trim());
+                }
+            }
+        }
+        if device_id.starts_with("rk_keyboard_") {
+            for (k, v) in &self.device_aliases {
+                if k.starts_with("rk_keyboard_") && !v.trim().is_empty() {
+                    return Some(v.trim());
+                }
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
@@ -128,5 +176,17 @@ mod tests {
         let json = serde_json::to_string(&cfg).expect("serialize");
         let deserialized: AppConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(deserialized.get_alias("test_dev"), Some("测试键盘"));
+    }
+
+    #[test]
+    fn test_config_set_alias_syncs_dual_mode_mouse() {
+        let mut cfg = AppConfig::default();
+        cfg.set_alias("mouse_1d57_fa60", "我的双模鼠标");
+        assert_eq!(cfg.resolve_alias("mouse_1d57_fa60"), Some("我的双模鼠标"));
+        assert_eq!(cfg.resolve_alias("mouse_1d57_fa61"), Some("我的双模鼠标"));
+
+        cfg.set_alias("mouse_1d57_fa60", "");
+        assert_eq!(cfg.resolve_alias("mouse_1d57_fa60"), None);
+        assert_eq!(cfg.resolve_alias("mouse_1d57_fa61"), None);
     }
 }

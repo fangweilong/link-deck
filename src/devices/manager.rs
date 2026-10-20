@@ -102,9 +102,12 @@ impl DeviceManager {
                                 dev.battery = b.clone();
                             }
                             if let Some(c03) = &mouse.col03_info {
+                                dev.id = format!("mouse_{:04x}_{:04x}", c03.vendor_id, c03.product_id);
+                                dev.vendor_id = c03.vendor_id;
+                                dev.product_id = c03.product_id;
+                                dev.path = c03.path.clone();
                                 if c03.product_id == crate::devices::saiggi_mouse::SAIGGI_PID_WIRED {
                                     dev.connection = crate::devices::types::ConnectionMode::Wired;
-                                    dev.name = "赛技 TM015 双模鼠标 (有线充电模式)".to_string();
                                     dev.battery.charging = true;
                                     dev.battery.charging_source = crate::devices::types::ChargingSource::Charging;
                                     dev.battery.online = true;
@@ -113,7 +116,6 @@ impl DeviceManager {
                                     }
                                 } else {
                                     dev.connection = crate::devices::types::ConnectionMode::Wireless24G;
-                                    dev.name = "赛技 TM015 双模无线鼠标".to_string();
                                     if dev.battery.charging {
                                         dev.battery.charging_source = crate::devices::types::ChargingSource::Charging;
                                     } else {
@@ -179,10 +181,8 @@ impl DeviceManager {
         let aliases_guard = self.aliases.read().unwrap();
         let mut snaps = guard.clone();
         for dev in snaps.iter_mut() {
-            if let Some(alias) = aliases_guard.get(&dev.id) {
-                if !alias.trim().is_empty() {
-                    dev.name = alias.trim().to_string();
-                }
+            if let Some(alias) = resolve_alias(&aliases_guard, dev) {
+                dev.name = alias.to_string();
             }
         }
         snaps
@@ -212,5 +212,86 @@ impl DeviceManager {
 impl Drop for DeviceManager {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Resolves alias with exact match, dual-mode paired ID fallback, or device family fallback.
+pub fn resolve_alias<'a>(aliases: &'a HashMap<String, String>, dev: &DeviceSnapshot) -> Option<&'a str> {
+    // 1. Exact id match
+    if let Some(alias) = aliases.get(&dev.id) {
+        if !alias.trim().is_empty() {
+            return Some(alias.trim());
+        }
+    }
+
+    // 2. Dual-mode mouse paired ID fallback (wireless dongle 0xFA60 <-> wired USB 0xFA61)
+    if dev.id == "mouse_1d57_fa60" {
+        if let Some(alias) = aliases.get("mouse_1d57_fa61") {
+            if !alias.trim().is_empty() {
+                return Some(alias.trim());
+            }
+        }
+    } else if dev.id == "mouse_1d57_fa61" {
+        if let Some(alias) = aliases.get("mouse_1d57_fa60") {
+            if !alias.trim().is_empty() {
+                return Some(alias.trim());
+            }
+        }
+    }
+
+    // 3. RK keyboard wireless dongle <-> wired fallback
+    if dev.id.starts_with("rk_keyboard_") {
+        for (k, v) in aliases {
+            if k.starts_with("rk_keyboard_") && !v.trim().is_empty() {
+                return Some(v.trim());
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::devices::types::{BatteryState, ConnectionMode, DeviceKind};
+
+    fn dummy_dev(id: &str, name: &str) -> DeviceSnapshot {
+        DeviceSnapshot {
+            id: id.to_string(),
+            name: name.to_string(),
+            kind: DeviceKind::Mouse,
+            vendor_id: 0x1D57,
+            product_id: 0xFA60,
+            connection: ConnectionMode::Wireless24G,
+            battery: BatteryState::default(),
+            path: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_resolve_alias_exact() {
+        let mut aliases = HashMap::new();
+        aliases.insert("mouse_1d57_fa60".to_string(), "我的无线鼠标".to_string());
+        let dev = dummy_dev("mouse_1d57_fa60", "原名称");
+        assert_eq!(resolve_alias(&aliases, &dev), Some("我的无线鼠标"));
+    }
+
+    #[test]
+    fn test_resolve_alias_paired_mouse() {
+        let mut aliases = HashMap::new();
+        aliases.insert("mouse_1d57_fa60".to_string(), "我的双模鼠标".to_string());
+        // Mouse is plugged in wired mode with PID 0xFA61
+        let dev_wired = dummy_dev("mouse_1d57_fa61", "原名称");
+        assert_eq!(resolve_alias(&aliases, &dev_wired), Some("我的双模鼠标"));
+    }
+
+    #[test]
+    fn test_resolve_alias_keyboard_fallback() {
+        let mut aliases = HashMap::new();
+        aliases.insert("rk_keyboard_fa70".to_string(), "我的客制化键盘".to_string());
+        let mut dev_wired = dummy_dev("rk_keyboard_01c6", "原键盘");
+        dev_wired.kind = DeviceKind::Keyboard;
+        assert_eq!(resolve_alias(&aliases, &dev_wired), Some("我的客制化键盘"));
     }
 }

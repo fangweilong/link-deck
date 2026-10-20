@@ -384,8 +384,8 @@ unsafe extern "system" fn ball_wnd_proc(
                     let num_devs = get_carousel_devices(&state.devices).len();
 
                     state.pulse_phase += 0.12;
-                    if state.pulse_phase > 6.283185 {
-                        state.pulse_phase -= 6.283185;
+                    if state.pulse_phase > std::f32::consts::TAU {
+                        state.pulse_phase -= std::f32::consts::TAU;
                     }
 
                     if !state.expanded && !state.hover && !state.dragging && num_devs > 1 {

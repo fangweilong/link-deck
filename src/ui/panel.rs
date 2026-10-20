@@ -312,7 +312,10 @@ unsafe extern "system" fn panel_wnd_proc(
                     ConnectionMode::Wireless24G if dev.id.contains("rk") => {
                         "Compx 2.4G 特性协议 (COL06)"
                     }
-                    ConnectionMode::Wireless24G => "Xenta 2.4G HID 协议 (COL03/04)",
+                    ConnectionMode::Wireless24G if dev.id.contains("mouse") => {
+                        "Xenta / Areson 2.4G HID 协议 (COL03/04)"
+                    }
+                    ConnectionMode::Wireless24G => "2.4G 无线 HID 协议",
                     ConnectionMode::Wired => "USB 有线直连通信",
                     ConnectionMode::Unknown => "标准 HID 电量服务",
                 };
@@ -420,7 +423,7 @@ unsafe extern "system" fn panel_wnd_proc(
                 right: width - 20,
                 bottom: height - 18,
             };
-            draw_text_clean(mem_dc, "v0.1.0 (Rust)", &mut ver_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+            draw_text_clean(mem_dc, concat!("v", env!("CARGO_PKG_VERSION"), " (Rust)"), &mut ver_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
             // Blit
             BitBlt(hdc, 0, 0, width, height, mem_dc, 0, 0, SRCCOPY);

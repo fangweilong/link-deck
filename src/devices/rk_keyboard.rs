@@ -35,7 +35,7 @@ impl RkKeyboardDriver {
                 battery.charging_source = ChargingSource::Charging;
             }
             let hw_name = HidDevice::open(dev.clone(), false).ok().and_then(|h| h.get_product_string());
-            let model_name = lookup_rk_model(dev.product_id, hw_name.as_deref(), "Compx / RK 三模机械键盘 (2.4G)");
+            let model_name = lookup_rk_model(dev.product_id, hw_name.as_deref(), "Compx 方案三模机械键盘");
             return Some(DeviceSnapshot {
                 id: format!("rk_keyboard_{:04x}", dev.product_id),
                 name: model_name,
@@ -61,7 +61,7 @@ impl RkKeyboardDriver {
             self.info = Some(dev.clone());
             let hw_name = HidDevice::open(dev.clone(), false).ok().and_then(|h| h.get_product_string());
             let mut battery = self.query_battery_internal(dev);
-            let model_name = lookup_rk_model(dev.product_id, hw_name.as_deref(), "RK 系列机械键盘 (有线模式)");
+            let model_name = lookup_rk_model(dev.product_id, hw_name.as_deref(), "Compx / Sonix 方案机械键盘");
 
             // When plugged in via USB cable to PC, it is PC USB powered and charging
             battery.charging = true;
@@ -180,12 +180,17 @@ impl RkKeyboardDriver {
 
 pub fn lookup_rk_model(pid: u16, hw_name: Option<&str>, default_name: &str) -> String {
     if let Some(hw) = hw_name {
-        if !hw.trim().is_empty() && !hw.eq_ignore_ascii_case("USB Input Device") {
-            return hw.trim().to_string();
+        let trimmed = hw.trim();
+        if !trimmed.is_empty()
+            && !trimmed.eq_ignore_ascii_case("USB Input Device")
+            && !trimmed.eq_ignore_ascii_case("HID-compliant device")
+            && !trimmed.eq_ignore_ascii_case("USB-HID")
+        {
+            return trimmed.to_string();
         }
     }
     match pid {
-        0xFA70 | 0xFA09 => "RK108 / RK 系列三模键盘 (2.4G)".to_string(),
+        0xFA70 | 0xFA09 => "Compx 方案三模机械键盘".to_string(),
         0x01C6 | 0x01D0 | 0x01D2 | 0x01DE => "RK F75 三模机械键盘".to_string(),
         0x0218 => "RK F99 三模机械键盘".to_string(),
         0x0147 | 0x0163 | 0x0175 => "RK M75 三模机械键盘".to_string(),
@@ -269,5 +274,29 @@ mod tests {
         let state = parse_rk_feature_report_6(&buf).expect("should parse");
         assert!(state.charging, "Keyboard should be marked charging when status flag set");
         assert_eq!(state.charging_source, ChargingSource::Charging);
+    }
+
+    #[test]
+    fn test_lookup_rk_model_hw_name_priority() {
+        let name = lookup_rk_model(0xFA70, Some("My Custom RK F75"), "默认键盘");
+        assert_eq!(name, "My Custom RK F75");
+    }
+
+    #[test]
+    fn test_lookup_rk_model_ignores_generic_hw_names() {
+        let name = lookup_rk_model(0x01C6, Some("USB Input Device"), "默认键盘");
+        assert_eq!(name, "RK F75 三模机械键盘");
+
+        let name_hid = lookup_rk_model(0x0218, Some("HID-compliant device"), "默认键盘");
+        assert_eq!(name_hid, "RK F99 三模机械键盘");
+    }
+
+    #[test]
+    fn test_lookup_rk_model_dongle_and_fallbacks() {
+        let dongle = lookup_rk_model(0xFA70, None, "默认键盘");
+        assert_eq!(dongle, "Compx 方案三模机械键盘");
+
+        let unknown = lookup_rk_model(0x9999, None, "默认键盘");
+        assert_eq!(unknown, "默认键盘");
     }
 }
