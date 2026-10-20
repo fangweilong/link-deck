@@ -8,8 +8,9 @@ use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPAR
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
     CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, RoundRect,
-    SelectObject, SetBkColor, SetBkMode, SetTextColor, DT_CENTER, DT_LEFT, DT_RIGHT, DT_SINGLELINE,
-    DT_VCENTER, FW_BOLD, FW_NORMAL, HDC, HFONT, PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
+    SelectObject, SetBkColor, SetBkMode, SetTextColor, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT,
+    DT_RIGHT, DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_NORMAL, HDC, HFONT, PAINTSTRUCT, PS_SOLID,
+    SRCCOPY, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
@@ -35,7 +36,7 @@ const CLR_HEADER: COLORREF = 0x00221E1A; // #1A1E22
 const CLR_CARD: COLORREF = 0x00201B18; // #181B20
 const CLR_CARD_BORDER: COLORREF = 0x003A322C; // #2C323A
 const CLR_TEXT: COLORREF = 0x00F4F4F4;
-const CLR_MUTED: COLORREF = 0x00908880;
+const CLR_MUTED: COLORREF = 0x00B0A8A0;
 const CLR_ACCENT: COLORREF = 0x00E08030; // Orange / Cyan
 const CLR_GREEN: COLORREF = 0x0081B910;
 const CLR_YELLOW: COLORREF = 0x000B9EF5;
@@ -228,7 +229,7 @@ pub unsafe fn draw_text_clean(hdc: HDC, text: &str, rect: &mut RECT, format: u32
 
 pub unsafe fn create_clear_font(size: i32, bold: bool) -> HFONT {
     CreateFontW(
-        size,
+        -size.abs(),
         0,
         0,
         0,
@@ -312,7 +313,7 @@ unsafe extern "system" fn panel_wnd_proc(
                 };
 
             // Header Title
-            let font_h1 = create_clear_font((18.0 * font_scale).round() as i32, true);
+            let font_h1 = create_clear_font((19.0 * font_scale).round() as i32, true);
             let old_font = SelectObject(mem_dc, font_h1);
             SetTextColor(mem_dc, CLR_TEXT);
 
@@ -325,7 +326,7 @@ unsafe extern "system" fn panel_wnd_proc(
             draw_text_clean(mem_dc, "LinkDeck 外设控制中心", &mut h_title_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
             // Header Subtitle
-            let font_sub = create_clear_font((11.5 * font_scale).round() as i32, false);
+            let font_sub = create_clear_font((12.5 * font_scale).round() as i32, false);
             SelectObject(mem_dc, font_sub);
             SetTextColor(mem_dc, CLR_MUTED);
 
@@ -338,9 +339,8 @@ unsafe extern "system" fn panel_wnd_proc(
             draw_text_clean(mem_dc, "状态栏常驻 · 贴边悬浮球 · 2.4G/蓝牙多协议电量管理", &mut h_sub_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
             // Header Right: View Switch Tabs
-            render_choice_pill(mem_dc, width - 215, 18, 92, 28, "📊 设备监控", active_tab == 0, hover_btn == 201);
-            render_choice_pill(mem_dc, width - 110, 18, 92, 28, "⚙️ 偏好设置", active_tab == 1, hover_btn == 202);
-
+            render_choice_pill(mem_dc, width - 215, 18, 92, 28, "📊 设备监控", active_tab == 0, hover_btn == 201, font_scale);
+            render_choice_pill(mem_dc, width - 110, 18, 92, 28, "⚙️ 偏好设置", active_tab == 1, hover_btn == 202, font_scale);
             if active_tab == 0 {
                 // --- TAB 0: DEVICE DASHBOARD ---
                 for (idx, dev) in devices.iter().take(3).enumerate() {
@@ -381,7 +381,7 @@ unsafe extern "system" fn panel_wnd_proc(
 
                 if devices.is_empty() {
                     SetTextColor(mem_dc, CLR_TEXT);
-                    let font_empty_title = create_clear_font((14.0 * font_scale).round() as i32, true);
+                    let font_empty_title = create_clear_font((15.0 * font_scale).round() as i32, true);
                     let old_empty_f = SelectObject(mem_dc, font_empty_title);
                     let mut emp_rect = RECT {
                         left: 20,
@@ -394,7 +394,7 @@ unsafe extern "system" fn panel_wnd_proc(
                     DeleteObject(font_empty_title);
 
                     SetTextColor(mem_dc, CLR_MUTED);
-                    let font_empty_tip = create_clear_font((11.5 * font_scale).round() as i32, false);
+                    let font_empty_tip = create_clear_font((12.5 * font_scale).round() as i32, false);
                     let old_tip_f = SelectObject(mem_dc, font_empty_tip);
                     let mut emp_tip_rect = RECT {
                         left: 20,
@@ -505,7 +505,7 @@ unsafe extern "system" fn panel_wnd_proc(
                     for idx in 0..3 {
                         let card_y = 74 + idx * 114;
                         if y >= card_y + 10 && y <= card_y + 32 {
-                            let btn_x = 20 + (width - 40) - 230 - 68;
+                            let btn_x = 20 + (width - 40) - 190;
                             if x >= btn_x && x <= btn_x + 58 {
                                 new_hover = 100 + idx;
                                 break;
@@ -606,7 +606,7 @@ unsafe extern "system" fn panel_wnd_proc(
                         for (idx, dev) in state.devices.iter().take(3).enumerate() {
                             let card_y = 74 + idx as i32 * 114;
                             if y >= card_y + 10 && y <= card_y + 32 {
-                                let btn_x = 20 + (width - 40) - 230 - 68;
+                                let btn_x = 20 + (width - 40) - 190;
                                 if x >= btn_x && x <= btn_x + 58 {
                                     clicked_card = Some((dev.id.clone(), dev.name.clone()));
                                     break;
@@ -759,24 +759,24 @@ unsafe fn render_settings_view(
     SetBkMode(mem_dc, TRANSPARENT as i32);
 
     // Section 1: 定时通信间隔
-    let f_title = create_clear_font((13.0 * font_scale).round() as i32, true);
+    let f_title = create_clear_font((14.0 * font_scale).round() as i32, true);
     let old_f = SelectObject(mem_dc, f_title);
     SetTextColor(mem_dc, CLR_TEXT);
     let mut s1_t = RECT { left: 20, top: 76, right: width - 20, bottom: 96 };
     draw_text_clean(mem_dc, "1. 定时通信间隔 (后台巡检轮询)", &mut s1_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    let f_desc = create_clear_font((11.0 * font_scale).round() as i32, false);
+    let f_desc = create_clear_font((12.0 * font_scale).round() as i32, false);
     SelectObject(mem_dc, f_desc);
     SetTextColor(mem_dc, CLR_MUTED);
     let mut s1_d = RECT { left: 20, top: 96, right: width - 20, bottom: 114 };
     draw_text_clean(mem_dc, "外设电量消耗慢，推荐长周期以极致省电；随时点击'立即刷新'可秒级直读当前电量。", &mut s1_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    render_choice_pill(mem_dc, 20, 118, 72, 26, "30s 调试", poll_ms <= 45_000, hover_btn == 30);
-    render_choice_pill(mem_dc, 98, 118, 72, 26, "1m 快速", poll_ms > 45_000 && poll_ms <= 120_000, hover_btn == 31);
-    render_choice_pill(mem_dc, 176, 118, 78, 26, "5m 推荐", poll_ms > 120_000 && poll_ms <= 600_000, hover_btn == 32);
-    render_choice_pill(mem_dc, 260, 118, 78, 26, "15m 适中", poll_ms > 600_000 && poll_ms <= 1_200_000, hover_btn == 33);
-    render_choice_pill(mem_dc, 344, 118, 78, 26, "30m 省电", poll_ms > 1_200_000 && poll_ms <= 2_700_000, hover_btn == 34);
-    render_choice_pill(mem_dc, 428, 118, 78, 26, "1h 极省", poll_ms > 2_700_000, hover_btn == 35);
+    render_choice_pill(mem_dc, 20, 118, 72, 26, "30s 调试", poll_ms <= 45_000, hover_btn == 30, font_scale);
+    render_choice_pill(mem_dc, 98, 118, 72, 26, "1m 快速", poll_ms > 45_000 && poll_ms <= 120_000, hover_btn == 31, font_scale);
+    render_choice_pill(mem_dc, 176, 118, 78, 26, "5m 推荐", poll_ms > 120_000 && poll_ms <= 600_000, hover_btn == 32, font_scale);
+    render_choice_pill(mem_dc, 260, 118, 78, 26, "15m 适中", poll_ms > 600_000 && poll_ms <= 1_200_000, hover_btn == 33, font_scale);
+    render_choice_pill(mem_dc, 344, 118, 78, 26, "30m 省电", poll_ms > 1_200_000 && poll_ms <= 2_700_000, hover_btn == 34, font_scale);
+    render_choice_pill(mem_dc, 428, 118, 78, 26, "1h 极省", poll_ms > 2_700_000, hover_btn == 35, font_scale);
 
     // Section 2: 界面显示字号
     SelectObject(mem_dc, f_title);
@@ -792,9 +792,9 @@ unsafe fn render_settings_view(
     let is_s100 = font_scale <= 1.05;
     let is_s115 = font_scale > 1.05 && font_scale <= 1.22;
     let is_s130 = font_scale > 1.22;
-    render_choice_pill(mem_dc, 20, 198, 92, 26, "100% 标准", is_s100, hover_btn == 40);
-    render_choice_pill(mem_dc, 120, 198, 92, 26, "115% 适中", is_s115, hover_btn == 41);
-    render_choice_pill(mem_dc, 220, 198, 92, 26, "130% 放大", is_s130, hover_btn == 42);
+    render_choice_pill(mem_dc, 20, 198, 92, 26, "100% 标准", is_s100, hover_btn == 40, font_scale);
+    render_choice_pill(mem_dc, 120, 198, 92, 26, "115% 适中", is_s115, hover_btn == 41, font_scale);
+    render_choice_pill(mem_dc, 220, 198, 92, 26, "130% 放大", is_s130, hover_btn == 42, font_scale);
 
     // Section 3: 桌面贴边悬浮球
     SelectObject(mem_dc, f_title);
@@ -808,7 +808,7 @@ unsafe fn render_settings_view(
     draw_text_clean(mem_dc, "吸附于屏幕边缘的微型动态能量环胶囊，滚轮切台，悬停滑出抽屉：", &mut s3_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
     let ball_text = if ball_on { "🔘 贴边悬浮球: [已开启]" } else { "⚪ 贴边悬浮球: [已关闭]" };
-    render_choice_pill(mem_dc, 20, 278, 180, 28, ball_text, ball_on, hover_btn == 50);
+    render_choice_pill(mem_dc, 20, 278, 180, 28, ball_text, ball_on, hover_btn == 50, font_scale);
 
     // Section 4: 低电量 Toast 弹窗通知
     SelectObject(mem_dc, f_title);
@@ -822,19 +822,19 @@ unsafe fn render_settings_view(
     draw_text_clean(mem_dc, "外设电量跌破阈值时在屏幕右下角弹出 Toast 提醒；全屏或玩游戏时降级/免打扰：", &mut s4_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
     let toast_text = if enable_toast { "🔔 电量弹窗: [已开启]" } else { "🔕 电量弹窗: [已关闭]" };
-    render_choice_pill(mem_dc, 20, 360, 160, 26, toast_text, enable_toast, hover_btn == 60);
+    render_choice_pill(mem_dc, 20, 360, 160, 26, toast_text, enable_toast, hover_btn == 60, font_scale);
 
     let game_text = if toast_gaming { "🎮 游戏全屏免打扰: [已开启]" } else { "🎮 游戏全屏免打扰: [已关闭]" };
-    render_choice_pill(mem_dc, 190, 360, 190, 26, game_text, toast_gaming, hover_btn == 61);
+    render_choice_pill(mem_dc, 190, 360, 190, 26, game_text, toast_gaming, hover_btn == 61, font_scale);
 
     // Row 2: Threshold buttons
     let info_str = format!("提示: < {}%", toast_info);
     let warn_str = format!("警告: < {}%", toast_warn);
     let crit_str = format!("危险: < {}%", toast_crit);
-    render_choice_pill(mem_dc, 20, 396, 105, 26, &info_str, true, hover_btn == 70);
-    render_choice_pill(mem_dc, 135, 396, 105, 26, &warn_str, true, hover_btn == 71);
-    render_choice_pill(mem_dc, 250, 396, 105, 26, &crit_str, true, hover_btn == 72);
-    render_choice_pill(mem_dc, 365, 396, 140, 26, "🚀 试发一条Toast", false, hover_btn == 80);
+    render_choice_pill(mem_dc, 20, 396, 105, 26, &info_str, true, hover_btn == 70, font_scale);
+    render_choice_pill(mem_dc, 135, 396, 105, 26, &warn_str, true, hover_btn == 71, font_scale);
+    render_choice_pill(mem_dc, 250, 396, 105, 26, &crit_str, true, hover_btn == 72, font_scale);
+    render_choice_pill(mem_dc, 365, 396, 140, 26, "🚀 试发一条Toast", false, hover_btn == 80, font_scale);
 
     // Bottom action: Back to devices view
     render_action_btn(
@@ -878,7 +878,7 @@ unsafe fn render_device_card(
     DeleteObject(border_pen);
 
     // Card Title
-    let font_sz_title = (14.5 * font_scale).round() as i32;
+    let font_sz_title = (15.0 * font_scale).round() as i32;
     let font_bold = create_clear_font(font_sz_title, true);
     let old_font = SelectObject(hdc, font_bold);
     SetTextColor(hdc, CLR_TEXT);
@@ -886,13 +886,13 @@ unsafe fn render_device_card(
     let mut t_rect = RECT {
         left: x + 16,
         top: y + 10,
-        right: x + w - 230 - 75,
+        right: x + w - 196,
         bottom: y + 32,
     };
-    draw_text_clean(hdc, &title_full, &mut t_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    draw_text_clean(hdc, &title_full, &mut t_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
 
     // Rename Button: [✏️ 改名]
-    let btn_x = x + w - 230 - 68;
+    let btn_x = x + w - 190;
     let btn_y = y + 11;
     let btn_w = 58;
     let btn_h = 20;
@@ -910,7 +910,7 @@ unsafe fn render_device_card(
     SelectObject(hdc, old_p);
     DeleteObject(edit_pen);
 
-    let font_btn = create_clear_font((10.5 * font_scale).round() as i32, false);
+    let font_btn = create_clear_font((11.5 * font_scale).round() as i32, false);
     SelectObject(hdc, font_btn);
     SetTextColor(hdc, if hover_edit { CLR_TEXT } else { CLR_MUTED });
     let mut btn_r = RECT {
@@ -924,7 +924,7 @@ unsafe fn render_device_card(
     DeleteObject(font_btn);
 
     // Protocol badge / connection info
-    let font_sz_sub = (11.5 * font_scale).round() as i32;
+    let font_sz_sub = (12.5 * font_scale).round() as i32;
     let font_normal = create_clear_font(font_sz_sub, false);
     SelectObject(hdc, font_normal);
     SetTextColor(hdc, CLR_MUTED);
@@ -945,11 +945,11 @@ unsafe fn render_device_card(
     let meta_str = format!("模式: {} | {} | {}", conn_str, vid_pid, protocol);
     let mut m_rect = RECT {
         left: x + 16,
-        top: y + 32,
+        top: y + 33,
         right: x + w - 16,
-        bottom: y + 50,
+        bottom: y + 52,
     };
-    draw_text_clean(hdc, &meta_str, &mut m_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    draw_text_clean(hdc, &meta_str, &mut m_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
 
     // Battery & status section
     let (pct, mv, charging, online) = if let Some(d) = dev {
@@ -965,7 +965,9 @@ unsafe fn render_device_card(
 
     let (chg_tag, status_color) = if let Some(d) = dev {
         if d.battery.charging || d.battery.charging_source.is_charging() {
-            (" ⚡[充电中]", CLR_CYAN)
+            (" ⚡", CLR_CYAN)
+        } else if !d.battery.online {
+            (" [待机]", CLR_MUTED)
         } else {
             let clr = if let Some(p) = pct {
                 if p >= 50 { CLR_GREEN } else if p >= 20 { CLR_YELLOW } else { CLR_RED }
@@ -978,7 +980,7 @@ unsafe fn render_device_card(
         ("", CLR_MUTED)
     };
     // Big Battery Percentage Display
-    let font_sz_big = (22.0 * font_scale).round() as i32;
+    let font_sz_big = (24.0 * font_scale).round() as i32;
     let font_big = create_clear_font(font_sz_big, true);
     SelectObject(hdc, font_big);
     SetTextColor(hdc, status_color);
@@ -992,7 +994,7 @@ unsafe fn render_device_card(
     };
 
     let mut p_rect = RECT {
-        left: x + w - 230,
+        left: x + w - 160,
         top: y + 8,
         right: x + w - 16,
         bottom: y + 42,
@@ -1013,7 +1015,7 @@ unsafe fn render_device_card(
         } else if online {
             "状态: 正常运行 · 已就绪".to_string()
         } else {
-            "状态: 处于低功耗省电模式 (触动即醒)".to_string()
+            "状态: 处于低功耗省电休眠模式 (触动即醒)".to_string()
         }
     } else {
         "状态: 等待外设接入".to_string()
@@ -1025,7 +1027,7 @@ unsafe fn render_device_card(
         right: x + w - 16,
         bottom: y + 76,
     };
-    draw_text_clean(hdc, &detail_str, &mut d_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    draw_text_clean(hdc, &detail_str, &mut d_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
 
     // Battery Progress Bar
     let bar_x = x + 16;
@@ -1074,6 +1076,7 @@ unsafe fn render_choice_pill(
     text: &str,
     active: bool,
     hover: bool,
+    font_scale: f32,
 ) {
     let (bg, border_clr, text_clr) = if active {
         (CLR_BTN_ACTIVE, CLR_ACCENT, CLR_TEXT)
@@ -1095,6 +1098,10 @@ unsafe fn render_choice_pill(
     SelectObject(hdc, op);
     DeleteObject(pen);
 
+    let font_sz = (12.0 * font_scale).round() as i32;
+    let font_pill = create_clear_font(font_sz, active);
+    let old_font = SelectObject(hdc, font_pill);
+
     SetTextColor(hdc, text_clr);
     let mut r = RECT {
         left: x,
@@ -1103,6 +1110,9 @@ unsafe fn render_choice_pill(
         bottom: y + h,
     };
     draw_text_clean(hdc, text, &mut r, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+    SelectObject(hdc, old_font);
+    DeleteObject(font_pill);
 }
 
 unsafe fn render_action_btn(
@@ -1129,10 +1139,10 @@ unsafe fn render_action_btn(
     SelectObject(hdc, old_pen);
     DeleteObject(border);
 
-    let font_sz = (12.5 * font_scale).round() as i32;
-    let font = create_clear_font(font_sz, false);
+    let font_sz = (13.0 * font_scale).round() as i32;
+    let font = create_clear_font(font_sz, true);
     let old_font = SelectObject(hdc, font);
-    SetTextColor(hdc, if hover { CLR_TEXT } else { 0x00D0C0B8 });
+    SetTextColor(hdc, if hover { CLR_TEXT } else { 0x00E0D8D0 });
 
     let mut r = RECT {
         left: x,

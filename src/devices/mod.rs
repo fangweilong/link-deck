@@ -8,6 +8,9 @@ pub mod logitech;
 pub mod mchose;
 pub mod vxe;
 pub mod razer;
+pub mod steelseries;
+pub mod asus_rog;
+pub mod corsair;
 pub mod types;
 
 pub use manager::DeviceManager;

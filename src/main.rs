@@ -24,6 +24,7 @@ use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED,
 };
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -59,9 +60,12 @@ struct AppCore {
 
 fn main() {
     unsafe {
-        // Enable Windows Per-Monitor V2 High-DPI Awareness
-        // Prevents blurriness, ensures pixel-perfect native ClearType font rendering
-        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        // Enable Windows GDI High-DPI Scaling (Windows 10 1809+ / Windows 11)
+        // Automatically renders GDI text and graphics at crisp native monitor DPI with ClearType,
+        // without bitmap stretching blur, while maintaining perfect layout coordinate fidelity.
+        if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED) == 0 {
+            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
     }
 
     let args: Vec<String> = std::env::args().collect();
@@ -144,10 +148,19 @@ fn main() {
         println!("6. 雷蛇 Razer Hyperspeed 全系无线电竞鼠标 (2.4G 无线 / 有线)");
         println!("   - 协议原理: OpenRazer 90字节 Class 0x07 标准报文双向校验 (CMD 0x80 电量 / CMD 0x84 充电)");
         println!("   - 典型设备: 毒蝰 Viper V2/V3 Pro、炼狱蝰蛇 DeathAdder V2/V3 Pro、巴塞利斯蛇 Basilisk 系列、眼镜蛇 Cobra Pro、八岐大蛇 Orochi 等");
-        println!("7. Windows 标准通用 HID 电量外设规范 (Standard HID Power)");
+        println!("7. 赛睿 SteelSeries 2.4G 无线鼠标 / 耳机 / 机械键盘 (2.4G 无线 / 有线)");
+        println!("   - 协议原理: SteelSeries 专有报文指令 (0xD2/0x92 鼠标电量, 0xAA Rival 650, 0x0618 Arctis耳机)");
+        println!("   - 典型设备: Aerox 3/5/9 Wireless、Prime Wireless、Rival 650、Apex Pro 无线键盘、Arctis 7 / 9 / Pro / Nova 系列耳机");
+        println!("8. 华硕 ASUS ROG / TUF 全系无线电竞外设 (2.4G 无线 / 有线)");
+        println!("   - 协议原理: ROG 专有 64字节 Feature Report (0x1207 鼠标电量, 0x1201 键盘电量, 支持 Omni 接收器)");
+        println!("   - 典型设备: ROG 龙鳞 Ace (Harpe Ace)、月刃 (Keris)、战刃 (Gladius III)、夜魔 (Azoth)、魔导士 (Falchion)、Claymore II 等");
+        println!("9. 美商海盗船 Corsair Slipstream / Bragi 全系无线外设 (2.4G 无线 / 有线)");
+        println!("   - 协议原理: Corsair Bragi 统一协议 (Magic 0x08, Prop 0x0F 电量千分比 / 0x10 充电状态) 及 NXP 兼容通道");
+        println!("   - 典型设备: 暗影 Dark Core RGB Pro/SE、卡特 Katar Pro/Elite、铁爪 Ironclaw、圣剑 Sabre、K70 PRO Mini、K100 AIR、HS70/80 耳机等");
+        println!("10. Windows 标准通用 HID 电量外设规范 (Standard HID Power)");
         println!("   - 协议原理: UsagePage 0x0084 (Power Device) / 0x0085 (Battery System)");
         println!("   - 典型设备: 实现了 Windows 官方标准 HID 电池规范的第三方外设");
-        println!("8. Windows 原生蓝牙 GATT 规范 (全品牌通用)");
+        println!("11. Windows 原生蓝牙 GATT 规范 (全品牌通用)");
         println!("   - 协议原理: Bluetooth SIG 统一 Battery Service 0x180F 及 HFP 音频协议");
         println!("   - 典型设备: 任何品牌走蓝牙连接电脑的鼠标、键盘、无线耳机 (AirPods/Sony等)、手柄");
         println!("{:-<70}", "");
@@ -405,11 +418,17 @@ unsafe extern "system" fn host_wnd_proc(
                     tip_lines.push("---------------------".to_string());
 
                     for dev in &snaps {
-                        let pct_text = dev
-                            .battery
-                            .percentage
-                            .map(|p| format!("{}%", p))
-                            .unwrap_or_else(|| "休眠".to_string());
+                        let pct_text = if let Some(p) = dev.battery.percentage {
+                            if !dev.battery.online {
+                                format!("{}% [待机]", p)
+                            } else {
+                                format!("{}%", p)
+                            }
+                        } else if dev.battery.online {
+                            "在线".to_string()
+                        } else {
+                            "待机".to_string()
+                        };
                         let chg_mark = dev.battery.charging_source.tray_mark(dev.battery.charging);
                         let icon = match dev.kind {
                             devices::DeviceKind::Keyboard => "⌨️",

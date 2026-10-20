@@ -52,7 +52,7 @@ const CLR_CARD_BG: COLORREF = 0x00201B18; // #181B20
 const CLR_ROW_BG: COLORREF = 0x001A1715; // #15171A
 const CLR_BORDER: COLORREF = 0x003A322C; // #2C323A
 const CLR_TEXT: COLORREF = 0x00F4F4F4;
-const CLR_TEXT_MUTED: COLORREF = 0x008C867E;
+const CLR_TEXT_MUTED: COLORREF = 0x00A8A098;
 const CLR_GREEN: COLORREF = 0x0081B910; // Emerald Green
 const CLR_YELLOW: COLORREF = 0x000B9EF5; // Amber
 const CLR_RED: COLORREF = 0x004444EF; // Crimson
@@ -349,7 +349,7 @@ pub unsafe fn draw_text_clean(hdc: HDC, text: &str, rect: &mut RECT, format: u32
 
 pub unsafe fn create_clear_font(size: i32, bold: bool) -> HFONT {
     CreateFontW(
-        size,
+        -size.abs(),
         0,
         0,
         0,
@@ -843,18 +843,18 @@ unsafe fn render_ball_widget(
         };
         (sym, CLR_TEXT_MUTED)
     };
+    SetTextColor(hdc, icon_clr);
     let mut icon_rect = RECT {
         left: 0,
-        top: 7,
+        top: 6,
         right: w,
-        bottom: 21,
+        bottom: 20,
     };
     draw_text_clean(hdc, icon_str, &mut icon_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-
     let font_pct_size = (13.0 * font_scale).round() as i32;
     let font_pct = create_clear_font(font_pct_size, true);
     SelectObject(hdc, font_pct);
-    SetTextColor(hdc, CLR_TEXT);
+    SetTextColor(hdc, if !online { CLR_TEXT_MUTED } else { CLR_TEXT });
 
     let pct_str = if let Some(p) = pct {
         format!("{}", p)
@@ -1066,14 +1066,19 @@ unsafe fn render_device_row(
             format!("{}% ⚡[充电中]", dev.battery.percentage.unwrap_or(100)),
         )
     } else if let Some(p) = dev.battery.percentage {
-        let color = if p >= 50 {
-            CLR_GREEN
-        } else if p >= 20 {
-            CLR_YELLOW
+        let (color, txt) = if !dev.battery.online {
+            (CLR_TEXT_MUTED, format!("{}% [待机]", p))
         } else {
-            CLR_RED
+            let color = if p >= 50 {
+                CLR_GREEN
+            } else if p >= 20 {
+                CLR_YELLOW
+            } else {
+                CLR_RED
+            };
+            (color, format!("{}%", p))
         };
-        (color, format!("{}%", p))
+        (color, txt)
     } else if dev.battery.online {
         (CLR_GREEN, "在线".to_string())
     } else {
@@ -1081,7 +1086,7 @@ unsafe fn render_device_row(
     };
     SetTextColor(hdc, status_color);
     let mut p_rect = RECT {
-        left: x + w - 102,
+        left: x + w - 110,
         top: y + 2,
         right: x + w - 6,
         bottom: y + 20,

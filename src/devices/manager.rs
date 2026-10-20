@@ -6,6 +6,9 @@ use crate::devices::saiggi_mouse::SaiggiMouseDriver;
 use crate::devices::standard_hid::StandardHidBatteryDriver;
 use crate::devices::vxe::VxeDriver;
 use crate::devices::razer::RazerDriver;
+use crate::devices::steelseries::SteelSeriesDriver;
+use crate::devices::asus_rog::AsusRogDriver;
+use crate::devices::corsair::CorsairDriver;
 use crate::devices::types::DeviceSnapshot;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -18,6 +21,7 @@ pub struct DeviceManager {
     aliases: Arc<RwLock<HashMap<String, String>>>,
     running: Arc<AtomicBool>,
     poll_interval_ms: Arc<AtomicU64>,
+    refresh_requested: Arc<AtomicBool>,
     poller_handle: Option<JoinHandle<()>>,
 }
 
@@ -32,6 +36,7 @@ impl DeviceManager {
             aliases: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(AtomicBool::new(false)),
             poll_interval_ms: Arc::new(AtomicU64::new(initial_interval_ms.max(500))),
+            refresh_requested: Arc::new(AtomicBool::new(false)),
             poller_handle: None,
         }
     }
@@ -58,7 +63,7 @@ impl DeviceManager {
         let running = Arc::clone(&self.running);
         let devices_arc = Arc::clone(&self.devices);
         let poll_interval = Arc::clone(&self.poll_interval_ms);
-
+        let refresh_requested = Arc::clone(&self.refresh_requested);
         let handle = thread::spawn(move || {
             let mut rk = RkKeyboardDriver::new();
             let mut mouse = SaiggiMouseDriver::new();
@@ -89,6 +94,15 @@ impl DeviceManager {
             for razer_dev in RazerDriver::scan_devices() {
                 push_unique(&mut current, razer_dev);
             }
+            for ss_dev in SteelSeriesDriver::scan_devices() {
+                push_unique(&mut current, ss_dev);
+            }
+            for asus_dev in AsusRogDriver::scan_devices() {
+                push_unique(&mut current, asus_dev);
+            }
+            for corsair_dev in CorsairDriver::scan_devices() {
+                push_unique(&mut current, corsair_dev);
+            }
             *devices_arc.write().unwrap() = current;
 
             while running.load(Ordering::SeqCst) {
@@ -104,6 +118,9 @@ impl DeviceManager {
                 let mchose_devices = MchoseDriver::scan_devices();
                 let vxe_devices = VxeDriver::scan_devices();
                 let razer_devices = RazerDriver::scan_devices();
+                let ss_devices = SteelSeriesDriver::scan_devices();
+                let asus_devices = AsusRogDriver::scan_devices();
+                let corsair_devices = CorsairDriver::scan_devices();
                 {
                     let mut list = devices_arc.write().unwrap();
                     let mut found_rk = false;
@@ -113,12 +130,20 @@ impl DeviceManager {
                         if dev.id.contains("rk_keyboard") {
                             found_rk = true;
                             if let Some(b) = &rk_bat {
+                                let old_pct = dev.battery.percentage;
                                 dev.battery = b.clone();
+                                if dev.battery.percentage.is_none() && old_pct.is_some() {
+                                    dev.battery.percentage = old_pct;
+                                }
                             }
                         } else if dev.id.contains("mouse_") {
                             found_mouse = true;
                             if let Some(b) = &mouse_bat {
+                                let old_pct = dev.battery.percentage;
                                 dev.battery = b.clone();
+                                if dev.battery.percentage.is_none() && old_pct.is_some() {
+                                    dev.battery.percentage = old_pct;
+                                }
                             }
                             if let Some(c03) = &mouse.col03_info {
                                 dev.id = format!("mouse_{:04x}_{:04x}", c03.vendor_id, c03.product_id);
@@ -220,18 +245,76 @@ impl DeviceManager {
                             list.push(razer_dev);
                         }
                     }
+
+                    // Sync SteelSeries devices
+                    for ss_dev in ss_devices {
+                        if let Some(existing) = list.iter_mut().find(|d| d.id == ss_dev.id) {
+                            existing.battery = ss_dev.battery;
+                        } else {
+                            list.push(ss_dev);
+                        }
+                    }
+
+                    // Sync ASUS ROG devices
+                    for asus_dev in asus_devices {
+                        if let Some(existing) = list.iter_mut().find(|d| d.id == asus_dev.id) {
+                            existing.battery = asus_dev.battery;
+                        } else {
+                            list.push(asus_dev);
+                        }
+                    }
+
+                    // Sync Corsair devices
+                    for corsair_dev in corsair_devices {
+                        if let Some(existing) = list.iter_mut().find(|d| d.id == corsair_dev.id) {
+                            existing.battery = corsair_dev.battery;
+                        } else {
+                            list.push(corsair_dev);
+                        }
+                    }
                 }
                 let target_ms = poll_interval.load(Ordering::Relaxed).max(500);
                 let slice = 100u64;
                 let mut elapsed = 0u64;
                 while elapsed < target_ms && running.load(Ordering::SeqCst) {
+                    if refresh_requested.load(Ordering::SeqCst) {
+                        break;
+                    }
                     thread::sleep(Duration::from_millis(slice));
                     elapsed += slice;
+
+                    // Real-time synchronization of background mouse reports:
+                    let mouse_latest = mouse.get_latest_battery();
+                    let was_recent = mouse_latest.online && mouse_latest.last_updated.elapsed().map(|d| d < Duration::from_secs(15)).unwrap_or(false);
+                    if was_recent {
+                        let mut list = devices_arc.write().unwrap();
+                        if let Some(dev) = list.iter_mut().find(|d| d.id.starts_with("mouse_")) {
+                            if mouse_latest.percentage.is_some() && dev.battery.percentage != mouse_latest.percentage {
+                                dev.battery.percentage = mouse_latest.percentage;
+                                dev.battery.online = true;
+                                dev.battery.charging = mouse_latest.charging;
+                                dev.battery.charging_source = mouse_latest.charging_source;
+                                dev.battery.last_updated = mouse_latest.last_updated;
+                            } else if !dev.battery.online {
+                                dev.battery.online = true;
+                                dev.battery.last_updated = mouse_latest.last_updated;
+                            }
+                        }
+                    } else {
+                        let mut list = devices_arc.write().unwrap();
+                        if let Some(dev) = list.iter_mut().find(|d| d.id.starts_with("mouse_")) {
+                            if dev.connection == crate::devices::types::ConnectionMode::Wireless24G && dev.battery.online {
+                                dev.battery.online = false;
+                            }
+                        }
+                    }
+
                     let current_target = poll_interval.load(Ordering::Relaxed).max(500);
                     if elapsed >= current_target {
                         break;
                     }
                 }
+                refresh_requested.store(false, Ordering::SeqCst);
             }
         });
 
@@ -250,36 +333,67 @@ impl DeviceManager {
         snaps
     }
     pub fn refresh(&self) {
-        let mut rk = RkKeyboardDriver::new();
-        let mut mouse = SaiggiMouseDriver::new();
-        let mut updated = Vec::new();
+        if self.running.load(Ordering::SeqCst) {
+            // Signal background worker thread with live driver instances to poll immediately
+            self.refresh_requested.store(true, Ordering::SeqCst);
+            for _ in 0..30 {
+                thread::sleep(Duration::from_millis(10));
+                if !self.refresh_requested.load(Ordering::SeqCst) {
+                    break;
+                }
+            }
+        } else {
+            let mut rk = RkKeyboardDriver::new();
+            let mut mouse = SaiggiMouseDriver::new();
+            let mut updated = Vec::new();
 
-        if let Some(d) = rk.detect() {
-            push_unique(&mut updated, d);
-        }
-        if let Some(d) = mouse.detect() {
-            push_unique(&mut updated, d);
-        }
-        for bt_dev in BluetoothBatteryScanner::scan_devices() {
-            push_unique(&mut updated, bt_dev);
-        }
-        for hid_dev in StandardHidBatteryDriver::scan_devices() {
-            push_unique(&mut updated, hid_dev);
-        }
-        for logi_dev in LogitechDriver::scan_devices() {
-            push_unique(&mut updated, logi_dev);
-        }
-        for mchose_dev in MchoseDriver::scan_devices() {
-            push_unique(&mut updated, mchose_dev);
-        }
-        for vxe_dev in VxeDriver::scan_devices() {
-            push_unique(&mut updated, vxe_dev);
-        }
-        for razer_dev in RazerDriver::scan_devices() {
-            push_unique(&mut updated, razer_dev);
-        }
+            if let Some(d) = rk.detect() {
+                push_unique(&mut updated, d);
+            }
+            if let Some(d) = mouse.detect() {
+                push_unique(&mut updated, d);
+            }
+            for bt_dev in BluetoothBatteryScanner::scan_devices() {
+                push_unique(&mut updated, bt_dev);
+            }
+            for hid_dev in StandardHidBatteryDriver::scan_devices() {
+                push_unique(&mut updated, hid_dev);
+            }
+            for logi_dev in LogitechDriver::scan_devices() {
+                push_unique(&mut updated, logi_dev);
+            }
+            for mchose_dev in MchoseDriver::scan_devices() {
+                push_unique(&mut updated, mchose_dev);
+            }
+            for vxe_dev in VxeDriver::scan_devices() {
+                push_unique(&mut updated, vxe_dev);
+            }
+            for razer_dev in RazerDriver::scan_devices() {
+                push_unique(&mut updated, razer_dev);
+            }
+            for ss_dev in SteelSeriesDriver::scan_devices() {
+                push_unique(&mut updated, ss_dev);
+            }
+            for asus_dev in AsusRogDriver::scan_devices() {
+                push_unique(&mut updated, asus_dev);
+            }
+            for corsair_dev in CorsairDriver::scan_devices() {
+                push_unique(&mut updated, corsair_dev);
+            }
 
-        *self.devices.write().unwrap() = updated;
+            let mut list = self.devices.write().unwrap();
+            for dev in updated {
+                if let Some(existing) = list.iter_mut().find(|d| d.id == dev.id) {
+                    let old_pct = existing.battery.percentage;
+                    existing.battery = dev.battery;
+                    if existing.battery.percentage.is_none() && old_pct.is_some() && existing.battery.online {
+                        existing.battery.percentage = old_pct;
+                    }
+                } else {
+                    list.push(dev);
+                }
+            }
+        }
     }
 }
 

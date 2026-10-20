@@ -26,7 +26,7 @@ const TOAST_HEIGHT: i32 = 82;
 const CLR_BG: COLORREF = 0x001B1816; // #16181B dark surface
 const CLR_BORDER: COLORREF = 0x003A322C; // #2C323A border
 const CLR_TEXT: COLORREF = 0x00F4F4F4;
-const CLR_MUTED: COLORREF = 0x00908880;
+const CLR_MUTED: COLORREF = 0x00B0A8A0;
 
 const CLR_INFO: COLORREF = 0x00D4B606; // Cyan/Blue
 const CLR_WARNING: COLORREF = 0x000B9EF5; // Orange/Yellow
@@ -271,6 +271,8 @@ unsafe extern "system" fn toast_wnd_proc(
                 draw_str(mem_dc, level.badge_text(), &mut b_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
                 // Title (Device Name)
+                let f_title = create_toast_font(13, true);
+                SelectObject(mem_dc, f_title);
                 SetTextColor(mem_dc, CLR_TEXT);
                 let mut t_rect = RECT {
                     left: 135,
@@ -281,7 +283,7 @@ unsafe extern "system" fn toast_wnd_proc(
                 draw_str(mem_dc, &title, &mut t_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
                 // Message Text
-                let f_msg = create_toast_font(11, false);
+                let f_msg = create_toast_font(12, false);
                 SelectObject(mem_dc, f_msg);
                 SetTextColor(mem_dc, CLR_MUTED);
                 let mut m_rect = RECT {
@@ -333,6 +335,7 @@ unsafe extern "system" fn toast_wnd_proc(
 
                 SelectObject(mem_dc, old_f);
                 DeleteObject(f_badge);
+                DeleteObject(f_title);
                 DeleteObject(f_msg);
             }
 
@@ -374,7 +377,7 @@ unsafe fn draw_str(hdc: HDC, text: &str, rect: &mut RECT, format: u32) {
 
 unsafe fn create_toast_font(size: i32, bold: bool) -> windows_sys::Win32::Graphics::Gdi::HFONT {
     CreateFontW(
-        size,
+        -size.abs(),
         0,
         0,
         0,

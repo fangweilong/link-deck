@@ -96,13 +96,29 @@ impl SaiggiMouseDriver {
             // Start background listener
             self.ensure_worker_running();
 
-            // Send ping to query
-            self.ping_device();
+            // Check if mouse is awake/online via ping
+            let is_online = if conn == ConnectionMode::Wired {
+                true
+            } else {
+                let t_ping = SystemTime::now();
+                self.ping_device();
+                let mut answered = false;
+                for _ in 0..8 {
+                    thread::sleep(Duration::from_millis(10));
+                    let guard = self.latest_battery.lock().unwrap();
+                    if guard.online && guard.last_updated >= t_ping {
+                        answered = true;
+                        break;
+                    }
+                }
+                answered
+            };
 
             let mut current_battery = {
                 let guard = self.latest_battery.lock().unwrap();
                 guard.clone()
             };
+            current_battery.online = is_online;
             if conn == ConnectionMode::Wired {
                 current_battery.charging = true;
                 current_battery.charging_source = ChargingSource::Charging;
@@ -152,26 +168,43 @@ impl SaiggiMouseDriver {
                 return Some(snap.battery);
             }
         }
+        let is_wired = self.col03_info.as_ref().map(|c| c.product_id != SAIGGI_PID_WIRELESS).unwrap_or(false);
 
-        self.ping_device();
+        let is_online = if is_wired {
+            true
+        } else {
+            let t_ping = SystemTime::now();
+            self.ping_device();
+
+            let mut answered = false;
+            for _ in 0..8 {
+                thread::sleep(Duration::from_millis(10));
+                let guard = self.latest_battery.lock().unwrap();
+                if guard.online && guard.last_updated >= t_ping {
+                    answered = true;
+                    break;
+                }
+            }
+            answered
+        };
 
         let mut bat = {
             let guard = self.latest_battery.lock().unwrap();
             guard.clone()
         };
-        if let Some(c03) = &self.col03_info {
-            if c03.product_id != SAIGGI_PID_WIRELESS {
-                bat.charging = true;
-                bat.charging_source = ChargingSource::Charging;
-                bat.online = true;
-                if bat.percentage.is_none() {
-                    bat.percentage = Some(100);
-                }
-            } else if bat.charging {
-                bat.charging_source = ChargingSource::Charging;
-            } else {
-                bat.charging_source = ChargingSource::None;
+        bat.online = is_online;
+
+        if is_wired {
+            bat.charging = true;
+            bat.charging_source = ChargingSource::Charging;
+            bat.online = true;
+            if bat.percentage.is_none() {
+                bat.percentage = Some(100);
             }
+        } else if bat.charging {
+            bat.charging_source = ChargingSource::Charging;
+        } else {
+            bat.charging_source = ChargingSource::None;
         }
         Some(bat)
     }
@@ -212,7 +245,11 @@ impl SaiggiMouseDriver {
                                     let is_wired = c03_info.product_id != SAIGGI_PID_WIRELESS;
                                     if let Some(parsed) = parse_mouse_battery_report(&buf[..n], is_wired) {
                                         let mut state = battery_arc.lock().unwrap();
+                                        let old_pct = state.percentage;
                                         *state = parsed;
+                                        if state.percentage.is_none() && old_pct.is_some() {
+                                            state.percentage = old_pct;
+                                        }
                                     }
                                 }
                                 Ok(_) => {}
@@ -229,11 +266,19 @@ impl SaiggiMouseDriver {
 
         self.worker_handle = Some(handle);
     }
+
+    pub fn get_latest_battery(&self) -> BatteryState {
+        let guard = self.latest_battery.lock().unwrap();
+        guard.clone()
+    }
 }
 
-/// Parses the Beken/Xenta report ID 3 battery packet: `[0x03, 0x10, 0x40, sub_type, level, ...]`
+/// Parses the Beken/Xenta report ID 3 battery packet: `[0x03, 0x10, 0x40/0x50, sub_type, level, ...]`
 pub fn parse_mouse_battery_report(buf: &[u8], is_wired: bool) -> Option<BatteryState> {
-    if buf.len() < 5 || buf[0] != 3 || buf[1] != 0x10 || buf[2] != 0x40 {
+    if buf.len() < 5 || buf[0] != 3 || buf[1] != 0x10 {
+        return None;
+    }
+    if buf[2] != 0x40 && buf[2] != 0x50 {
         return None;
     }
     // In Beken/Xenta 2.4G mouse protocol:
@@ -245,14 +290,16 @@ pub fn parse_mouse_battery_report(buf: &[u8], is_wired: bool) -> Option<BatteryS
     let charging = is_wired || is_dock_charging;
     let raw_lvl = buf[4];
     let pct = if (1..=10).contains(&raw_lvl) {
-        raw_lvl * 10
+        Some(raw_lvl * 10)
     } else if raw_lvl == 0 && is_wired {
-        100
+        Some(100)
+    } else if (11..=100).contains(&raw_lvl) && buf[2] == 0x40 {
+        Some(raw_lvl)
     } else {
-        raw_lvl.min(100)
+        None
     };
     Some(BatteryState {
-        percentage: Some(pct),
+        percentage: pct,
         voltage_mv: None,
         charging,
         charging_source: if is_wired || charging {
