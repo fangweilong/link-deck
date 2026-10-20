@@ -2,8 +2,8 @@ name: Build & Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Build & Release (main branch only)
+    name: Build & Release
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -19,23 +19,26 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify tag is on main branch
+      - name: Extract Cargo.toml version
+        id: version
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ "${{ github.ref }}" != "refs/heads/main" ]; then
-              echo "✗ Error: Manual trigger must run on the main branch!"
-              exit 1
-            fi
-            echo "✓ Verified: Manual run on main branch."
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ -z "$VERSION" ]; then
+            echo "✗ Error: Failed to extract version from Cargo.toml"
+            exit 1
+          fi
+          echo "Detected version from Cargo.toml: $VERSION"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          git fetch --tags
+          if git rev-parse "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists on remote. Skipping GitHub Release publication."
+            echo "NEW_VERSION=false" >> $GITHUB_ENV
           else
-            git fetch origin main:refs/remotes/origin/main
-            if git merge-base --is-ancestor HEAD origin/main; then
-              echo "✓ Verified: Tag ${{ github.ref_name }} is on main branch."
-            else
-              echo "✗ Error: Tag ${{ github.ref_name }} is NOT on main branch! Build aborted."
-              exit 1
-            fi
+            echo "New version detected: v$VERSION. Will publish GitHub Release."
+            echo "NEW_VERSION=true" >> $GITHUB_ENV
           fi
 
       - name: Set up Rust toolchain
@@ -55,14 +58,16 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: link-deck-${{ github.ref_name }}
+          name: link-deck-v${{ env.VERSION }}
           path: target/release/link-deck.exe
           if-no-files-found: error
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.NEW_VERSION == 'true' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: v${{ env.VERSION }}
+          name: LinkDeck v${{ env.VERSION }}
           files: target/release/link-deck.exe
           draft: false
           prerelease: false
