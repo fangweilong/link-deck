@@ -21,6 +21,17 @@ const DEVPKEY_DEVICE_BATTERY_LEVEL: DEVPROPKEY = DEVPROPKEY {
     pid: 2,
 };
 
+// DEVPKEY_Device_IsConnected: {83DA6326-97A6-4088-9453-A1923F573B29}, 15
+const DEVPKEY_DEVICE_IS_CONNECTED: DEVPROPKEY = DEVPROPKEY {
+    fmtid: windows_sys::core::GUID {
+        data1: 0x83DA6326,
+        data2: 0x97A6,
+        data3: 0x4088,
+        data4: [0x94, 0x53, 0xA1, 0x92, 0x3F, 0x57, 0x3B, 0x29],
+    },
+    pid: 15,
+};
+
 pub struct BluetoothBatteryScanner;
 
 impl BluetoothBatteryScanner {
@@ -62,6 +73,27 @@ impl BluetoothBatteryScanner {
                 );
 
                 if ok != 0 && prop_size > 0 {
+                    // Verify whether the Bluetooth device is actually currently connected.
+                    // Windows retains paired device nodes and caches the last known battery level
+                    // even after the device is disconnected / powered off / switched to 2.4G.
+                    let mut conn_buf = [0u8; 16];
+                    let mut conn_size = conn_buf.len() as u32;
+                    let mut conn_type = 0u32;
+                    let conn_ok = SetupDiGetDevicePropertyW(
+                        dev_info,
+                        &dev_data,
+                        &DEVPKEY_DEVICE_IS_CONNECTED,
+                        &mut conn_type,
+                        conn_buf.as_mut_ptr(),
+                        conn_buf.len() as u32,
+                        &mut conn_size,
+                        0,
+                    );
+                    if conn_ok != 0 && conn_size > 0 && conn_buf[0] == 0 {
+                        // Device is paired but not currently connected via Bluetooth
+                        continue;
+                    }
+
                     let battery_pct = prop_buf[0].min(100);
 
                     // Get instance ID

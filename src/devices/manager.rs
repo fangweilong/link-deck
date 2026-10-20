@@ -150,7 +150,14 @@ impl DeviceManager {
                         }
                     }
 
-                    // Sync Bluetooth devices
+                    // Sync Bluetooth devices: remove disconnected, update existing, add newly connected
+                    list.retain(|d| {
+                        if d.connection == crate::devices::types::ConnectionMode::Bluetooth {
+                            bt_devices.iter().any(|b| b.id == d.id)
+                        } else {
+                            true
+                        }
+                    });
                     for bt_dev in bt_devices {
                         if let Some(existing) = list.iter_mut().find(|d| d.id == bt_dev.id) {
                             existing.battery = bt_dev.battery;
