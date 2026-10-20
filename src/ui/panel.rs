@@ -24,11 +24,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 pub const PANEL_WIDTH: i32 = 530;
-pub const PANEL_HEIGHT: i32 = 572;
+pub const PANEL_HEIGHT: i32 = 580;
 
 // Custom message for renaming device alias from GUI: wParam = &id, lParam = &new_name
 pub const WM_DEVICE_RENAME: u32 = 0x8000 + 101;
-// Color theme
+// Custom message for persisting toast settings to config
+pub const WM_SAVE_TOAST_SETTINGS: u32 = 0x8000 + 104;
 const CLR_BG: COLORREF = 0x00161412; // #121416
 const CLR_HEADER: COLORREF = 0x00221E1A; // #1A1E22
 const CLR_CARD: COLORREF = 0x00201B18; // #181B20
@@ -48,7 +49,7 @@ pub struct PanelWindow {
     pub hwnd: HWND,
 }
 
-static mut PANEL_STATE: Option<Arc<Mutex<PanelStateData>>> = None;
+pub static mut PANEL_STATE: Option<Arc<Mutex<PanelStateData>>> = None;
 
 pub struct PanelStateData {
     pub devices: Vec<DeviceSnapshot>,
@@ -58,14 +59,17 @@ pub struct PanelStateData {
     pub font_scale: f32,
     pub poll_interval_ms: u64,
     pub host_hwnd: HWND,
+    pub active_tab: usize, // 0 = Devices, 1 = Settings
+    pub enable_toast: bool,
+    pub toast_info: u8,
+    pub toast_warning: u8,
+    pub toast_critical: u8,
+    pub toast_gaming_suppression: bool,
 }
-
 impl PanelWindow {
     pub fn new(
         host_hwnd: HWND,
-        initial_ball_enabled: bool,
-        font_scale: f32,
-        initial_poll_interval_ms: u64,
+        config: &crate::config::AppConfig,
     ) -> Result<Self, String> {
         unsafe {
             let instance = GetModuleHandleW(ptr::null());
@@ -94,10 +98,16 @@ impl PanelWindow {
                 devices: Vec::new(),
                 visible: false,
                 hover_btn: 0,
-                floating_ball_enabled: initial_ball_enabled,
-                font_scale,
-                poll_interval_ms: initial_poll_interval_ms,
+                floating_ball_enabled: config.enable_floating_ball,
+                font_scale: config.font_scale,
+                poll_interval_ms: config.poll_interval_ms,
                 host_hwnd,
+                active_tab: 0,
+                enable_toast: config.enable_battery_toast,
+                toast_info: config.toast_threshold_info,
+                toast_warning: config.toast_threshold_warning,
+                toast_critical: config.toast_threshold_critical,
+                toast_gaming_suppression: config.toast_gaming_suppression,
             }));
             PANEL_STATE = Some(state_data);
 
@@ -162,6 +172,24 @@ impl PanelWindow {
                 ShowWindow(self.hwnd, SW_SHOW);
             }
             SetForegroundWindow(self.hwnd);
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(self.hwnd, ptr::null(), 0);
+        }
+    }
+
+    pub fn show_settings(&self) {
+        unsafe {
+            if let Some(state_arc) = &PANEL_STATE {
+                let mut state = state_arc.lock().unwrap();
+                state.visible = true;
+                state.active_tab = 1;
+            }
+            if IsIconic(self.hwnd) != 0 {
+                ShowWindow(self.hwnd, SW_RESTORE);
+            } else {
+                ShowWindow(self.hwnd, SW_SHOW);
+            }
+            SetForegroundWindow(self.hwnd);
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(self.hwnd, ptr::null(), 0);
         }
     }
 
@@ -263,180 +291,163 @@ unsafe extern "system" fn panel_wnd_proc(
 
             SetBkMode(mem_dc, TRANSPARENT as i32);
 
-            let (devices, ball_on, font_scale, poll_ms, hover_btn) = if let Some(state_arc) = &PANEL_STATE {
-                let state = state_arc.lock().unwrap();
-                (
-                    state.devices.clone(),
-                    state.floating_ball_enabled,
-                    state.font_scale,
-                    state.poll_interval_ms,
-                    state.hover_btn,
-                )
-            } else {
-                (Vec::new(), false, 1.15, 3000, 0)
-            };
+            let (devices, ball_on, font_scale, poll_ms, hover_btn, active_tab, enable_toast, toast_info, toast_warn, toast_crit, toast_gaming) =
+                if let Some(state_arc) = &PANEL_STATE {
+                    let state = state_arc.lock().unwrap();
+                    (
+                        state.devices.clone(),
+                        state.floating_ball_enabled,
+                        state.font_scale,
+                        state.poll_interval_ms,
+                        state.hover_btn,
+                        state.active_tab,
+                        state.enable_toast,
+                        state.toast_info,
+                        state.toast_warning,
+                        state.toast_critical,
+                        state.toast_gaming_suppression,
+                    )
+                } else {
+                    (Vec::new(), false, 1.15, 300_000, 0, 0, true, 50, 30, 10, true)
+                };
 
             // Header Title
-            let font_h1 = create_clear_font((19.0 * font_scale).round() as i32, true);
+            let font_h1 = create_clear_font((18.0 * font_scale).round() as i32, true);
             let old_font = SelectObject(mem_dc, font_h1);
             SetTextColor(mem_dc, CLR_TEXT);
 
             let mut h_title_rect = RECT {
                 left: 20,
                 top: 8,
-                right: width - 20,
+                right: width - 230,
                 bottom: 34,
             };
             draw_text_clean(mem_dc, "LinkDeck 外设控制中心", &mut h_title_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
             // Header Subtitle
-            let font_sub = create_clear_font((12.0 * font_scale).round() as i32, false);
+            let font_sub = create_clear_font((11.5 * font_scale).round() as i32, false);
             SelectObject(mem_dc, font_sub);
             SetTextColor(mem_dc, CLR_MUTED);
 
             let mut h_sub_rect = RECT {
                 left: 20,
                 top: 36,
-                right: width - 20,
+                right: width - 230,
                 bottom: 56,
             };
-            draw_text_clean(mem_dc, "常驻系统状态栏 · 贴边悬浮球可配置 · 蓝牙/2.4G/有线全兼容", &mut h_sub_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            draw_text_clean(mem_dc, "状态栏常驻 · 贴边悬浮球 · 2.4G/蓝牙多协议电量管理", &mut h_sub_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-            // Render Device Cards (up to 3 devices)
-            for (idx, dev) in devices.iter().take(3).enumerate() {
-                let y_card = 74 + idx as i32 * 114;
-                let icon = match dev.kind {
-                    DeviceKind::Keyboard => "⌨️",
-                    DeviceKind::Mouse => "🖱️",
-                    DeviceKind::Headset => "🎧",
-                    _ => "📱",
-                };
-                let protocol = match dev.connection {
-                    ConnectionMode::Bluetooth => "Windows 蓝牙电池服务 (HFP / GATT)",
-                    ConnectionMode::Wireless24G if dev.id.contains("rk") => {
-                        "Compx 2.4G 特性协议 (COL06)"
-                    }
-                    ConnectionMode::Wireless24G if dev.id.contains("mouse") => {
-                        "Xenta / Areson 2.4G HID 协议 (COL03/04)"
-                    }
-                    ConnectionMode::Wireless24G => "2.4G 无线 HID 协议",
-                    ConnectionMode::Wired => "USB 有线直连通信",
-                    ConnectionMode::Unknown => "标准 HID 电量服务",
-                };
-                let is_hover_edit = hover_btn == (100 + idx as i32);
-                render_device_card(
+            // Header Right: View Switch Tabs
+            render_choice_pill(mem_dc, width - 215, 18, 92, 28, "📊 设备监控", active_tab == 0, hover_btn == 201);
+            render_choice_pill(mem_dc, width - 110, 18, 92, 28, "⚙️ 偏好设置", active_tab == 1, hover_btn == 202);
+
+            if active_tab == 0 {
+                // --- TAB 0: DEVICE DASHBOARD ---
+                for (idx, dev) in devices.iter().take(3).enumerate() {
+                    let y_card = 74 + idx as i32 * 114;
+                    let icon = match dev.kind {
+                        DeviceKind::Keyboard => "⌨️",
+                        DeviceKind::Mouse => "🖱️",
+                        DeviceKind::Headset => "🎧",
+                        _ => "📱",
+                    };
+                    let protocol = match dev.connection {
+                        ConnectionMode::Bluetooth => "Windows 蓝牙电池服务 (GATT / HFP)",
+                        ConnectionMode::Wireless24G if dev.id.contains("rk") => "Compx 2.4G 键盘直连协议",
+                        ConnectionMode::Wireless24G if dev.id.contains("logitech") => "Logitech HID++ 2.4G 接收器协议",
+                        ConnectionMode::Wireless24G if dev.id.contains("razer") => "Razer Hyperspeed 2.4G 接收器协议",
+                        ConnectionMode::Wireless24G if dev.id.contains("mchose") => "MCHOSE 2.4G 接收器协议",
+                        ConnectionMode::Wireless24G if dev.id.contains("vxe") => "VXE / VGN 2.4G 接收器协议",
+                        ConnectionMode::Wireless24G if dev.id.contains("mouse") => "Xenta / Areson 2.4G HID 协议",
+                        ConnectionMode::Wireless24G => "2.4G 无线 HID 直连协议",
+                        ConnectionMode::Wired => "USB 有线直连通信",
+                        ConnectionMode::Unknown => "标准 HID 电量服务",
+                    };
+                    let is_hover_edit = hover_btn == (100 + idx as i32);
+                    render_device_card(
+                        mem_dc,
+                        20,
+                        y_card,
+                        width - 40,
+                        106,
+                        &dev.name,
+                        icon,
+                        protocol,
+                        Some(dev),
+                        font_scale,
+                        is_hover_edit,
+                    );
+                }
+
+                if devices.is_empty() {
+                    SetTextColor(mem_dc, CLR_TEXT);
+                    let font_empty_title = create_clear_font((14.0 * font_scale).round() as i32, true);
+                    let old_empty_f = SelectObject(mem_dc, font_empty_title);
+                    let mut emp_rect = RECT {
+                        left: 20,
+                        top: 130,
+                        right: width - 20,
+                        bottom: 156,
+                    };
+                    draw_text_clean(mem_dc, "未检测到已适配的 2.4G 外设或在线蓝牙设备", &mut emp_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+                    SelectObject(mem_dc, old_empty_f);
+                    DeleteObject(font_empty_title);
+
+                    SetTextColor(mem_dc, CLR_MUTED);
+                    let font_empty_tip = create_clear_font((11.5 * font_scale).round() as i32, false);
+                    let old_tip_f = SelectObject(mem_dc, font_empty_tip);
+                    let mut emp_tip_rect = RECT {
+                        left: 20,
+                        top: 162,
+                        right: width - 20,
+                        bottom: 226,
+                    };
+                    draw_text_clean(mem_dc, "已适配: 罗技/雷蛇全系 · RK/狼蛛键盘 · 迈从/VXE/达尔优鼠标 · 赛技 · 全系蓝牙\n提示: 多模外设切至蓝牙模式可直接读取；可在终端运行 --protocols 查看完整清单", &mut emp_tip_rect, DT_CENTER);
+                    SelectObject(mem_dc, old_tip_f);
+                    DeleteObject(font_empty_tip);
+                }
+
+                // Dashboard Footer: Instant Refresh & Settings Button
+                render_action_btn(
                     mem_dc,
                     20,
-                    y_card,
-                    width - 40,
-                    106,
-                    &dev.name,
-                    icon,
-                    protocol,
-                    Some(dev),
+                    height - 48,
+                    160,
+                    34,
+                    "🔄 立即刷新设备",
+                    hover_btn == 1,
                     font_scale,
-                    is_hover_edit,
+                );
+
+                render_action_btn(
+                    mem_dc,
+                    190,
+                    height - 48,
+                    130,
+                    34,
+                    "⚙️ 偏好设置",
+                    hover_btn == 2,
+                    font_scale,
+                );
+            } else {
+                // --- TAB 1: DEDICATED SETTINGS VIEW ---
+                render_settings_view(
+                    mem_dc,
+                    width,
+                    height,
+                    font_scale,
+                    poll_ms,
+                    ball_on,
+                    enable_toast,
+                    toast_info,
+                    toast_warn,
+                    toast_crit,
+                    toast_gaming,
+                    hover_btn,
                 );
             }
 
-            if devices.is_empty() {
-                SetTextColor(mem_dc, CLR_TEXT);
-                let font_empty_title = create_clear_font((14.0 * font_scale).round() as i32, true);
-                let old_empty_f = SelectObject(mem_dc, font_empty_title);
-                let mut emp_rect = RECT {
-                    left: 20,
-                    top: 125,
-                    right: width - 20,
-                    bottom: 152,
-                };
-                draw_text_clean(mem_dc, "未检测到已适配的 2.4G 外设或蓝牙设备", &mut emp_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-                SelectObject(mem_dc, old_empty_f);
-                DeleteObject(font_empty_title);
-
-                SetTextColor(mem_dc, CLR_MUTED);
-                let font_empty_tip = create_clear_font((11.5 * font_scale).round() as i32, false);
-                let old_tip_f = SelectObject(mem_dc, font_empty_tip);
-                let mut emp_tip_rect = RECT {
-                    left: 20,
-                    top: 156,
-                    right: width - 20,
-                    bottom: 220,
-                };
-                draw_text_clean(mem_dc, "已适配: 罗技 Lightspeed/GPW · RK 键盘 · 迈从/VXE 鼠标 · 赛技 · 全系蓝牙\n提示: 多模外设切至蓝牙模式可直接读取；终端运行 --protocols 查看完整清单", &mut emp_tip_rect, DT_CENTER);
-                SelectObject(mem_dc, old_tip_f);
-                DeleteObject(font_empty_tip);
-            }
-
-            // Polling Interval Selector Row (at height - 124 .. height - 98)
-            let font_label_sz = (12.0 * font_scale).round() as i32;
-            let f_opt = create_clear_font(font_label_sz, false);
-            SelectObject(mem_dc, f_opt);
-            SetTextColor(mem_dc, CLR_MUTED);
-
-            let mut p_label_rect = RECT {
-                left: 20,
-                top: height - 124,
-                right: 95,
-                bottom: height - 98,
-            };
-            draw_text_clean(mem_dc, "刷新频率:", &mut p_label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
-            let is_p1500 = poll_ms <= 2000;
-            let is_p3000 = poll_ms > 2000 && poll_ms <= 6000;
-            let is_p10000 = poll_ms > 6000 && poll_ms <= 20000;
-            let is_p30000 = poll_ms > 20000;
-
-            render_choice_pill(mem_dc, 98, height - 124, 76, 26, "1.5s 极速", is_p1500, hover_btn == 20);
-            render_choice_pill(mem_dc, 180, height - 124, 76, 26, "3s 推荐", is_p3000, hover_btn == 21);
-            render_choice_pill(mem_dc, 262, height - 124, 82, 26, "10s 省电", is_p10000, hover_btn == 22);
-            render_choice_pill(mem_dc, 350, height - 124, 94, 26, "30s 长续航", is_p30000, hover_btn == 23);
-
-            // Font Scale Selector Row (at height - 90 .. height - 64)
-            let mut f_label_rect = RECT {
-                left: 20,
-                top: height - 90,
-                right: 95,
-                bottom: height - 64,
-            };
-            draw_text_clean(mem_dc, "字体大小:", &mut f_label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
-            let is_s100 = font_scale <= 1.05;
-            let is_s115 = font_scale > 1.05 && font_scale <= 1.22;
-            let is_s130 = font_scale > 1.22;
-
-            render_choice_pill(mem_dc, 98, height - 90, 86, 26, "100% 标准", is_s100, hover_btn == 10);
-            render_choice_pill(mem_dc, 190, height - 90, 86, 26, "115% 适中", is_s115, hover_btn == 11);
-            render_choice_pill(mem_dc, 282, height - 90, 86, 26, "130% 放大", is_s130, hover_btn == 12);
-            // Footer Action Buttons (at height - 50)
-            render_action_btn(
-                mem_dc,
-                20,
-                height - 48,
-                140,
-                34,
-                "🔄 刷新外设状态",
-                hover_btn == 1,
-                font_scale,
-            );
-
-            let ball_btn_text = if ball_on {
-                "🔘 贴边悬浮球: [已开启]"
-            } else {
-                "⚪ 贴边悬浮球: [已关闭]"
-            };
-
-            render_action_btn(
-                mem_dc,
-                170,
-                height - 48,
-                185,
-                34,
-                ball_btn_text,
-                hover_btn == 2,
-                font_scale,
-            );
-
-            // Version info at right
+            // Version info at bottom right
             SetTextColor(mem_dc, CLR_MUTED);
             let mut ver_rect = RECT {
                 left: width - 140,
@@ -452,7 +463,7 @@ unsafe extern "system" fn panel_wnd_proc(
             SelectObject(mem_dc, old_font);
             DeleteObject(font_h1);
             DeleteObject(font_sub);
-            DeleteObject(f_opt);
+            // Delete fonts
             SelectObject(mem_dc, old_bmp);
             DeleteObject(mem_bmp);
             DeleteDC(mem_dc);
@@ -466,46 +477,70 @@ unsafe extern "system" fn panel_wnd_proc(
 
             let mut rect: RECT = mem::zeroed();
             GetClientRect(hwnd, &mut rect);
+            let width = rect.right - rect.left;
             let height = rect.bottom - rect.top;
 
-            let mut new_hover = 0;
-            // Polling pills: height - 124 .. height - 98
-            if y >= height - 124 && y <= height - 98 {
-                if x >= 98 && x <= 174 {
-                    new_hover = 20;
-                } else if x >= 180 && x <= 256 {
-                    new_hover = 21;
-                } else if x >= 262 && x <= 344 {
-                    new_hover = 22;
-                } else if x >= 350 && x <= 444 {
-                    new_hover = 23;
-                }
-            } else if y >= height - 90 && y <= height - 64 {
-                if x >= 98 && x <= 184 {
-                    new_hover = 10;
-                } else if x >= 190 && x <= 276 {
-                    new_hover = 11;
-                } else if x >= 282 && x <= 368 {
-                    new_hover = 12;
-                }
-            } else if y >= height - 52 && y <= height - 12 {
-                if x >= 20 && x <= 160 {
-                    new_hover = 1;
-                } else if x >= 170 && x <= 355 {
-                    new_hover = 2;
-                }
+            let active_tab = if let Some(state_arc) = &PANEL_STATE {
+                state_arc.lock().unwrap().active_tab
             } else {
-                for idx in 0..3 {
-                    let card_y = 74 + idx * 114;
-                    if y >= card_y + 10 && y <= card_y + 32 {
-                        let btn_x = 20 + (rect.right - rect.left - 40) - 230 - 68;
-                        if x >= btn_x && x <= btn_x + 58 {
-                            new_hover = 100 + idx;
-                            break;
+                0
+            };
+
+            let mut new_hover = 0;
+            // Top header tabs
+            if y >= 14 && y <= 48 {
+                if x >= width - 215 && x <= width - 123 {
+                    new_hover = 201;
+                } else if x >= width - 110 && x <= width - 18 {
+                    new_hover = 202;
+                }
+            } else if active_tab == 0 {
+                if y >= height - 48 && y <= height - 14 {
+                    if x >= 20 && x <= 180 {
+                        new_hover = 1;
+                    } else if x >= 190 && x <= 320 {
+                        new_hover = 2;
+                    }
+                } else {
+                    for idx in 0..3 {
+                        let card_y = 74 + idx * 114;
+                        if y >= card_y + 10 && y <= card_y + 32 {
+                            let btn_x = 20 + (width - 40) - 230 - 68;
+                            if x >= btn_x && x <= btn_x + 58 {
+                                new_hover = 100 + idx;
+                                break;
+                            }
                         }
                     }
                 }
+            } else {
+                // Settings View Hover
+                if y >= 115 && y <= 146 {
+                    if x >= 20 && x <= 92 { new_hover = 30; }
+                    else if x >= 98 && x <= 170 { new_hover = 31; }
+                    else if x >= 176 && x <= 254 { new_hover = 32; }
+                    else if x >= 260 && x <= 338 { new_hover = 33; }
+                    else if x >= 344 && x <= 422 { new_hover = 34; }
+                    else if x >= 428 && x <= 506 { new_hover = 35; }
+                } else if y >= 195 && y <= 226 {
+                    if x >= 20 && x <= 112 { new_hover = 40; }
+                    else if x >= 120 && x <= 212 { new_hover = 41; }
+                    else if x >= 220 && x <= 312 { new_hover = 42; }
+                } else if y >= 275 && y <= 308 {
+                    if x >= 20 && x <= 200 { new_hover = 50; }
+                } else if y >= 356 && y <= 388 {
+                    if x >= 20 && x <= 180 { new_hover = 60; }
+                    else if x >= 190 && x <= 380 { new_hover = 61; }
+                } else if y >= 392 && y <= 424 {
+                    if x >= 20 && x <= 125 { new_hover = 70; }
+                    else if x >= 135 && x <= 240 { new_hover = 71; }
+                    else if x >= 250 && x <= 355 { new_hover = 72; }
+                    else if x >= 365 && x <= 505 { new_hover = 80; }
+                } else if y >= height - 48 && y <= height - 14 {
+                    if x >= 20 && x <= 180 { new_hover = 90; }
+                }
             }
+
             if let Some(state_arc) = &PANEL_STATE {
                 let mut state = state_arc.lock().unwrap();
                 if state.hover_btn != new_hover {
@@ -521,73 +556,48 @@ unsafe extern "system" fn panel_wnd_proc(
 
             let mut rect: RECT = mem::zeroed();
             GetClientRect(hwnd, &mut rect);
+            let width = rect.right - rect.left;
             let height = rect.bottom - rect.top;
 
-            let host = if let Some(state_arc) = &PANEL_STATE {
-                state_arc.lock().unwrap().host_hwnd
+            let (host, active_tab) = if let Some(state_arc) = &PANEL_STATE {
+                let s = state_arc.lock().unwrap();
+                (s.host_hwnd, s.active_tab)
             } else {
-                ptr::null_mut()
+                (ptr::null_mut(), 0)
             };
 
-            if !host.is_null() {
-                if y >= height - 124 && y <= height - 98 {
-                    let cmd = if x >= 98 && x <= 174 {
-                        crate::ui::tray::IDM_POLL_1500
-                    } else if x >= 180 && x <= 256 {
-                        crate::ui::tray::IDM_POLL_3000
-                    } else if x >= 262 && x <= 344 {
-                        crate::ui::tray::IDM_POLL_10000
-                    } else if x >= 350 && x <= 444 {
-                        crate::ui::tray::IDM_POLL_30000
-                    } else {
-                        0
-                    };
-                    if cmd > 0 {
-                        windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
-                            host,
-                            windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
-                            cmd as _,
-                            0,
-                        );
+            // 1. Top Header Tabs
+            if y >= 14 && y <= 48 {
+                if x >= width - 215 && x <= width - 123 {
+                    if let Some(state_arc) = &PANEL_STATE {
+                        let mut s = state_arc.lock().unwrap();
+                        s.active_tab = 0;
                     }
-                } else if y >= height - 90 && y <= height - 64 {
-                    if x >= 98 && x <= 184 {
-                        windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
-                            host,
-                            windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
-                            crate::ui::tray::IDM_FONT_SCALE_100 as _,
-                            0,
-                        );
-                    } else if x >= 190 && x <= 276 {
-                        windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
-                            host,
-                            windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
-                            crate::ui::tray::IDM_FONT_SCALE_115 as _,
-                            0,
-                        );
-                    } else if x >= 282 && x <= 368 {
-                        windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
-                            host,
-                            windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
-                            crate::ui::tray::IDM_FONT_SCALE_130 as _,
-                            0,
-                        );
+                    windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+                    return 0;
+                } else if x >= width - 110 && x <= width - 18 {
+                    if let Some(state_arc) = &PANEL_STATE {
+                        let mut s = state_arc.lock().unwrap();
+                        s.active_tab = 1;
                     }
-                } else if y >= height - 52 && y <= height - 12 {
-                    if x >= 20 && x <= 160 {
-                        windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
-                            host,
-                            windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
-                            crate::ui::tray::IDM_REFRESH as _,
-                            0,
-                        );
-                    } else if x >= 170 && x <= 355 {
-                        windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
-                            host,
-                            windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
-                            crate::ui::tray::IDM_TOGGLE_BALL as _,
-                            0,
-                        );
+                    windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+                    return 0;
+                }
+            }
+
+            if active_tab == 0 {
+                // Device Dashboard Actions
+                if y >= height - 48 && y <= height - 14 {
+                    if x >= 20 && x <= 180 {
+                        if !host.is_null() {
+                            PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, crate::ui::tray::IDM_REFRESH as _, 0);
+                        }
+                    } else if x >= 190 && x <= 320 {
+                        if let Some(state_arc) = &PANEL_STATE {
+                            let mut s = state_arc.lock().unwrap();
+                            s.active_tab = 1;
+                        }
+                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
                     }
                 } else {
                     let mut clicked_card = None;
@@ -596,7 +606,7 @@ unsafe extern "system" fn panel_wnd_proc(
                         for (idx, dev) in state.devices.iter().take(3).enumerate() {
                             let card_y = 74 + idx as i32 * 114;
                             if y >= card_y + 10 && y <= card_y + 32 {
-                                let btn_x = 20 + (rect.right - rect.left - 40) - 230 - 68;
+                                let btn_x = 20 + (width - 40) - 230 - 68;
                                 if x >= btn_x && x <= btn_x + 58 {
                                     clicked_card = Some((dev.id.clone(), dev.name.clone()));
                                     break;
@@ -604,11 +614,125 @@ unsafe extern "system" fn panel_wnd_proc(
                             }
                         }
                     }
-
                     if let Some((dev_id, cur_name)) = clicked_card {
                         if let Some(new_name) = show_rename_dialog(hwnd, &cur_name) {
                             send_rename_to_host(host, &dev_id, &new_name);
                         }
+                    }
+                }
+            } else {
+                // Settings View Actions
+                if y >= 115 && y <= 146 {
+                    let cmd = if x >= 20 && x <= 92 {
+                        crate::ui::tray::IDM_POLL_30S
+                    } else if x >= 98 && x <= 170 {
+                        crate::ui::tray::IDM_POLL_1M
+                    } else if x >= 176 && x <= 254 {
+                        crate::ui::tray::IDM_POLL_5M
+                    } else if x >= 260 && x <= 338 {
+                        crate::ui::tray::IDM_POLL_15M
+                    } else if x >= 344 && x <= 422 {
+                        crate::ui::tray::IDM_POLL_30M
+                    } else if x >= 428 && x <= 506 {
+                        crate::ui::tray::IDM_POLL_60M
+                    } else {
+                        0
+                    };
+                    if cmd > 0 && !host.is_null() {
+                        PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, cmd as _, 0);
+                    }
+                } else if y >= 195 && y <= 226 {
+                    let cmd = if x >= 20 && x <= 112 {
+                        crate::ui::tray::IDM_FONT_SCALE_100
+                    } else if x >= 120 && x <= 212 {
+                        crate::ui::tray::IDM_FONT_SCALE_115
+                    } else if x >= 220 && x <= 312 {
+                        crate::ui::tray::IDM_FONT_SCALE_130
+                    } else {
+                        0
+                    };
+                    if cmd > 0 && !host.is_null() {
+                        PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, cmd as _, 0);
+                    }
+                } else if y >= 275 && y <= 308 {
+                    if x >= 20 && x <= 200 && !host.is_null() {
+                        PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, crate::ui::tray::IDM_TOGGLE_BALL as _, 0);
+                    }
+                } else if y >= 356 && y <= 388 {
+                    if x >= 20 && x <= 180 {
+                        if let Some(state_arc) = &PANEL_STATE {
+                            let mut s = state_arc.lock().unwrap();
+                            s.enable_toast = !s.enable_toast;
+                        }
+                        if !host.is_null() {
+                            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
+                        }
+                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+                    } else if x >= 190 && x <= 380 {
+                        if let Some(state_arc) = &PANEL_STATE {
+                            let mut s = state_arc.lock().unwrap();
+                            s.toast_gaming_suppression = !s.toast_gaming_suppression;
+                        }
+                        if !host.is_null() {
+                            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
+                        }
+                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+                    }
+                } else if y >= 392 && y <= 424 {
+                    if x >= 20 && x <= 125 {
+                        if let Some(state_arc) = &PANEL_STATE {
+                            let mut s = state_arc.lock().unwrap();
+                            s.toast_info = match s.toast_info {
+                                40 => 50,
+                                50 => 60,
+                                _ => 40,
+                            };
+                        }
+                        if !host.is_null() {
+                            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
+                        }
+                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+                    } else if x >= 135 && x <= 240 {
+                        if let Some(state_arc) = &PANEL_STATE {
+                            let mut s = state_arc.lock().unwrap();
+                            s.toast_warning = match s.toast_warning {
+                                20 => 30,
+                                30 => 35,
+                                _ => 20,
+                            };
+                        }
+                        if !host.is_null() {
+                            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
+                        }
+                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+                    } else if x >= 250 && x <= 355 {
+                        if let Some(state_arc) = &PANEL_STATE {
+                            let mut s = state_arc.lock().unwrap();
+                            s.toast_critical = match s.toast_critical {
+                                5 => 10,
+                                10 => 15,
+                                _ => 5,
+                            };
+                        }
+                        if !host.is_null() {
+                            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
+                        }
+                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+                    } else if x >= 365 && x <= 505 {
+                        crate::ui::toast::ToastNotification::show(
+                            "罗技 M720 Triathlon",
+                            "电量已降至 28% (警告通知测试)",
+                            crate::ui::toast::ToastLevel::Warning,
+                            28,
+                        );
+                    }
+                } else if y >= height - 48 && y <= height - 14 {
+                    if x >= 20 && x <= 180 {
+                        if let Some(state_arc) = &PANEL_STATE {
+                            let mut s = state_arc.lock().unwrap();
+                            s.active_tab = 0;
+                        }
+                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
                     }
                 }
             }
@@ -616,6 +740,117 @@ unsafe extern "system" fn panel_wnd_proc(
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+unsafe fn render_settings_view(
+    mem_dc: HDC,
+    width: i32,
+    height: i32,
+    font_scale: f32,
+    poll_ms: u64,
+    ball_on: bool,
+    enable_toast: bool,
+    toast_info: u8,
+    toast_warn: u8,
+    toast_crit: u8,
+    toast_gaming: bool,
+    hover_btn: i32,
+) {
+    SetBkMode(mem_dc, TRANSPARENT as i32);
+
+    // Section 1: 定时通信间隔
+    let f_title = create_clear_font((13.0 * font_scale).round() as i32, true);
+    let old_f = SelectObject(mem_dc, f_title);
+    SetTextColor(mem_dc, CLR_TEXT);
+    let mut s1_t = RECT { left: 20, top: 76, right: width - 20, bottom: 96 };
+    draw_text_clean(mem_dc, "1. 定时通信间隔 (后台巡检轮询)", &mut s1_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    let f_desc = create_clear_font((11.0 * font_scale).round() as i32, false);
+    SelectObject(mem_dc, f_desc);
+    SetTextColor(mem_dc, CLR_MUTED);
+    let mut s1_d = RECT { left: 20, top: 96, right: width - 20, bottom: 114 };
+    draw_text_clean(mem_dc, "外设电量消耗慢，推荐长周期以极致省电；随时点击'立即刷新'可秒级直读当前电量。", &mut s1_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    render_choice_pill(mem_dc, 20, 118, 72, 26, "30s 调试", poll_ms <= 45_000, hover_btn == 30);
+    render_choice_pill(mem_dc, 98, 118, 72, 26, "1m 快速", poll_ms > 45_000 && poll_ms <= 120_000, hover_btn == 31);
+    render_choice_pill(mem_dc, 176, 118, 78, 26, "5m 推荐", poll_ms > 120_000 && poll_ms <= 600_000, hover_btn == 32);
+    render_choice_pill(mem_dc, 260, 118, 78, 26, "15m 适中", poll_ms > 600_000 && poll_ms <= 1_200_000, hover_btn == 33);
+    render_choice_pill(mem_dc, 344, 118, 78, 26, "30m 省电", poll_ms > 1_200_000 && poll_ms <= 2_700_000, hover_btn == 34);
+    render_choice_pill(mem_dc, 428, 118, 78, 26, "1h 极省", poll_ms > 2_700_000, hover_btn == 35);
+
+    // Section 2: 界面显示字号
+    SelectObject(mem_dc, f_title);
+    SetTextColor(mem_dc, CLR_TEXT);
+    let mut s2_t = RECT { left: 20, top: 156, right: width - 20, bottom: 176 };
+    draw_text_clean(mem_dc, "2. 界面显示字号 (ClearType 次像素渲染)", &mut s2_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    SelectObject(mem_dc, f_desc);
+    SetTextColor(mem_dc, CLR_MUTED);
+    let mut s2_d = RECT { left: 20, top: 176, right: width - 20, bottom: 194 };
+    draw_text_clean(mem_dc, "Windows 微软雅黑高分屏抗锯齿次像素渲染字体缩放比例：", &mut s2_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    let is_s100 = font_scale <= 1.05;
+    let is_s115 = font_scale > 1.05 && font_scale <= 1.22;
+    let is_s130 = font_scale > 1.22;
+    render_choice_pill(mem_dc, 20, 198, 92, 26, "100% 标准", is_s100, hover_btn == 40);
+    render_choice_pill(mem_dc, 120, 198, 92, 26, "115% 适中", is_s115, hover_btn == 41);
+    render_choice_pill(mem_dc, 220, 198, 92, 26, "130% 放大", is_s130, hover_btn == 42);
+
+    // Section 3: 桌面贴边悬浮球
+    SelectObject(mem_dc, f_title);
+    SetTextColor(mem_dc, CLR_TEXT);
+    let mut s3_t = RECT { left: 20, top: 236, right: width - 20, bottom: 256 };
+    draw_text_clean(mem_dc, "3. 桌面贴边悬浮球", &mut s3_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    SelectObject(mem_dc, f_desc);
+    SetTextColor(mem_dc, CLR_MUTED);
+    let mut s3_d = RECT { left: 20, top: 256, right: width - 20, bottom: 274 };
+    draw_text_clean(mem_dc, "吸附于屏幕边缘的微型动态能量环胶囊，滚轮切台，悬停滑出抽屉：", &mut s3_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    let ball_text = if ball_on { "🔘 贴边悬浮球: [已开启]" } else { "⚪ 贴边悬浮球: [已关闭]" };
+    render_choice_pill(mem_dc, 20, 278, 180, 28, ball_text, ball_on, hover_btn == 50);
+
+    // Section 4: 低电量 Toast 弹窗通知
+    SelectObject(mem_dc, f_title);
+    SetTextColor(mem_dc, CLR_TEXT);
+    let mut s4_t = RECT { left: 20, top: 318, right: width - 20, bottom: 338 };
+    draw_text_clean(mem_dc, "4. 低电量原生 Toast 弹窗通知 (多级预警)", &mut s4_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    SelectObject(mem_dc, f_desc);
+    SetTextColor(mem_dc, CLR_MUTED);
+    let mut s4_d = RECT { left: 20, top: 338, right: width - 20, bottom: 356 };
+    draw_text_clean(mem_dc, "外设电量跌破阈值时在屏幕右下角弹出 Toast 提醒；全屏或玩游戏时降级/免打扰：", &mut s4_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    let toast_text = if enable_toast { "🔔 电量弹窗: [已开启]" } else { "🔕 电量弹窗: [已关闭]" };
+    render_choice_pill(mem_dc, 20, 360, 160, 26, toast_text, enable_toast, hover_btn == 60);
+
+    let game_text = if toast_gaming { "🎮 游戏全屏免打扰: [已开启]" } else { "🎮 游戏全屏免打扰: [已关闭]" };
+    render_choice_pill(mem_dc, 190, 360, 190, 26, game_text, toast_gaming, hover_btn == 61);
+
+    // Row 2: Threshold buttons
+    let info_str = format!("提示: < {}%", toast_info);
+    let warn_str = format!("警告: < {}%", toast_warn);
+    let crit_str = format!("危险: < {}%", toast_crit);
+    render_choice_pill(mem_dc, 20, 396, 105, 26, &info_str, true, hover_btn == 70);
+    render_choice_pill(mem_dc, 135, 396, 105, 26, &warn_str, true, hover_btn == 71);
+    render_choice_pill(mem_dc, 250, 396, 105, 26, &crit_str, true, hover_btn == 72);
+    render_choice_pill(mem_dc, 365, 396, 140, 26, "🚀 试发一条Toast", false, hover_btn == 80);
+
+    // Bottom action: Back to devices view
+    render_action_btn(
+        mem_dc,
+        20,
+        height - 48,
+        150,
+        34,
+        "◀ 返回设备监控",
+        hover_btn == 90,
+        font_scale,
+    );
+
+    SelectObject(mem_dc, old_f);
+    DeleteObject(f_title);
+    DeleteObject(f_desc);
 }
 unsafe fn render_device_card(
     hdc: HDC,

@@ -14,15 +14,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 pub const WM_TRAY_CALLBACK: u32 = WM_APP + 100;
 
 pub const IDM_SHOW_PANEL: usize = 1001;
+pub const IDM_SHOW_SETTINGS: usize = 1005;
 pub const IDM_TOGGLE_BALL: usize = 1002;
 pub const IDM_REFRESH: usize = 1003;
 pub const IDM_FONT_SCALE_100: usize = 1010;
 pub const IDM_FONT_SCALE_115: usize = 1011;
 pub const IDM_FONT_SCALE_130: usize = 1012;
-pub const IDM_POLL_1500: usize = 1020;
-pub const IDM_POLL_3000: usize = 1021;
-pub const IDM_POLL_10000: usize = 1022;
-pub const IDM_POLL_30000: usize = 1023;
+pub const IDM_POLL_30S: usize = 1020;
+pub const IDM_POLL_1M: usize = 1021;
+pub const IDM_POLL_5M: usize = 1022;
+pub const IDM_POLL_15M: usize = 1023;
+pub const IDM_POLL_30M: usize = 1024;
+pub const IDM_POLL_60M: usize = 1025;
 pub const IDM_EXIT: usize = 1004;
 
 pub struct TrayIcon {
@@ -68,7 +71,7 @@ impl TrayIcon {
         }
     }
 
-    pub fn show_context_menu(hwnd: HWND, ball_enabled: bool, font_scale: f32, poll_interval_ms: u64) -> usize {
+    pub fn show_context_menu(hwnd: HWND, ball_enabled: bool, _font_scale: f32, _poll_interval_ms: u64) -> usize {
         unsafe {
             let mut pt = mem::zeroed();
             GetCursorPos(&mut pt);
@@ -79,35 +82,17 @@ impl TrayIcon {
                 AppendMenuW(menu, MF_STRING, id, wide.as_ptr());
             };
 
-            add_item(hmenu, IDM_SHOW_PANEL, "📊 外设控制中心 (管理面板)");
+            add_item(hmenu, IDM_SHOW_PANEL, "📊 外设控制中心 (主界面)");
+            add_item(hmenu, IDM_SHOW_SETTINGS, "⚙️ 偏好设置 (定时间隔/字号/Toast)");
+            add_item(hmenu, IDM_REFRESH, "🔄 立即刷新设备状态");
+            AppendMenuW(hmenu, MF_SEPARATOR, 0, ptr::null());
+
             let ball_label = if ball_enabled {
-                "🔘 贴边悬浮球: [已开启]"
+                "🔘 桌面贴边悬浮球: [已开启]"
             } else {
-                "⚪ 贴边悬浮球: [已关闭]"
+                "⚪ 桌面贴边悬浮球: [已关闭]"
             };
             add_item(hmenu, IDM_TOGGLE_BALL, ball_label);
-
-            // Font size options
-            let font_label_100 = if font_scale <= 1.05 { "  ✓ 标准字号 (100%)" } else { "    标准字号 (100%)" };
-            let font_label_115 = if font_scale > 1.05 && font_scale <= 1.22 { "  ✓ 适中字号 (115%)" } else { "    适中字号 (115%)" };
-            let font_label_130 = if font_scale > 1.22 { "  ✓ 放大字号 (130%)" } else { "    放大字号 (130%)" };
-            add_item(hmenu, IDM_FONT_SCALE_100, font_label_100);
-            add_item(hmenu, IDM_FONT_SCALE_115, font_label_115);
-            add_item(hmenu, IDM_FONT_SCALE_130, font_label_130);
-            AppendMenuW(hmenu, MF_SEPARATOR, 0, ptr::null());
-
-            // Polling interval options
-            let p1500 = if poll_interval_ms <= 2000 { "  ✓ 极速轮询 (1.5秒 - 实时灵敏)" } else { "    极速轮询 (1.5秒 - 实时灵敏)" };
-            let p3000 = if poll_interval_ms > 2000 && poll_interval_ms <= 6000 { "  ✓ 均衡轮询 (3秒 - 推荐平衡)" } else { "    均衡轮询 (3秒 - 推荐平衡)" };
-            let p10000 = if poll_interval_ms > 6000 && poll_interval_ms <= 20000 { "  ✓ 省电轮询 (10秒 - 低RF功耗)" } else { "    省电轮询 (10秒 - 低RF功耗)" };
-            let p30000 = if poll_interval_ms > 20000 { "  ✓ 长续航 (30秒 - 极少发包)" } else { "    长续航 (30秒 - 极少发包)" };
-            add_item(hmenu, IDM_POLL_1500, p1500);
-            add_item(hmenu, IDM_POLL_3000, p3000);
-            add_item(hmenu, IDM_POLL_10000, p10000);
-            add_item(hmenu, IDM_POLL_30000, p30000);
-
-            AppendMenuW(hmenu, MF_SEPARATOR, 0, ptr::null());
-            add_item(hmenu, IDM_REFRESH, "🔄 立即刷新设备状态");
             AppendMenuW(hmenu, MF_SEPARATOR, 0, ptr::null());
             add_item(hmenu, IDM_EXIT, "❌ 退出 LinkDeck");
 

@@ -15,6 +15,34 @@ pub struct AppConfig {
     /// Custom device aliases by device id, e.g. {"rk_keyboard_fa70": "我的客制化 RK108"}
     #[serde(default)]
     pub device_aliases: std::collections::HashMap<String, String>,
+    /// Whether low-battery toast notifications are enabled
+    #[serde(default = "default_true")]
+    pub enable_battery_toast: bool,
+    /// Threshold for battery info notification (default: 50)
+    #[serde(default = "default_info_threshold")]
+    pub toast_threshold_info: u8,
+    /// Threshold for battery warning notification (default: 30)
+    #[serde(default = "default_warning_threshold")]
+    pub toast_threshold_warning: u8,
+    /// Threshold for battery critical notification (default: 10)
+    #[serde(default = "default_critical_threshold")]
+    pub toast_threshold_critical: u8,
+    /// Suppress topmost during fullscreen / gaming
+    #[serde(default = "default_true")]
+    pub toast_gaming_suppression: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_info_threshold() -> u8 {
+    50
+}
+fn default_warning_threshold() -> u8 {
+    30
+}
+fn default_critical_threshold() -> u8 {
+    10
 }
 
 impl Default for AppConfig {
@@ -22,9 +50,14 @@ impl Default for AppConfig {
         Self {
             enable_floating_ball: true, // Default: enabled on screen edge
             floating_ball_y_ratio: 0.75, // Lower-right area above taskbar
-            poll_interval_ms: 2500,
-            font_scale: 1.15, // Clear, comfortably readable font scale
+            poll_interval_ms: 300_000,   // Default: 5 minutes (300,000 ms)
+            font_scale: 1.15,            // Clear, comfortably readable font scale
             device_aliases: std::collections::HashMap::new(),
+            enable_battery_toast: true,
+            toast_threshold_info: 50,
+            toast_threshold_warning: 30,
+            toast_threshold_critical: 10,
+            toast_gaming_suppression: true,
         }
     }
 }

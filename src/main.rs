@@ -14,8 +14,8 @@ use ui::floating_ball::FloatingBallWindow;
 use ui::panel::PanelWindow;
 use ui::tray::{
     TrayIcon, IDM_EXIT, IDM_FONT_SCALE_100, IDM_FONT_SCALE_115, IDM_FONT_SCALE_130,
-    IDM_POLL_1500, IDM_POLL_3000, IDM_POLL_10000, IDM_POLL_30000, IDM_REFRESH, IDM_SHOW_PANEL,
-    IDM_TOGGLE_BALL, WM_TRAY_CALLBACK,
+    IDM_POLL_1M, IDM_POLL_15M, IDM_POLL_30M, IDM_POLL_30S, IDM_POLL_5M, IDM_POLL_60M,
+    IDM_REFRESH, IDM_SHOW_PANEL, IDM_SHOW_SETTINGS, IDM_TOGGLE_BALL, WM_TRAY_CALLBACK,
 };
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT, WPARAM,
@@ -280,7 +280,7 @@ fn main() {
                 .expect("Failed to create floating ball");
 
         // Create Management Panel Window
-        let panel = PanelWindow::new(hwnd, initial_ball_enabled, initial_font_scale, initial_poll_ms)
+        let panel = PanelWindow::new(hwnd, &config)
             .expect("Failed to create panel");
         let app_core = Arc::new(Mutex::new(AppCore {
             config,
@@ -378,6 +378,15 @@ unsafe extern "system" fn host_wnd_proc(
                     let ball_on = app.config.enable_floating_ball;
                     let font_scale = app.config.font_scale;
                     let poll_ms = app.config.poll_interval_ms;
+                    let toast_on = app.config.enable_battery_toast;
+                    let t_info = app.config.toast_threshold_info;
+                    let t_warn = app.config.toast_threshold_warning;
+                    let t_crit = app.config.toast_threshold_critical;
+
+                    // Multi-threshold battery toast alerts
+                    if toast_on {
+                        check_battery_toast_alerts(&snaps, t_info, t_warn, t_crit);
+                    }
 
                     // Update floating ball if enabled
                     if let Some(fb) = &app.floating_ball {
@@ -453,6 +462,14 @@ unsafe extern "system" fn host_wnd_proc(
                         }
                     }
                 }
+                IDM_SHOW_SETTINGS => {
+                    if let Some(app_arc) = &APP_INSTANCE {
+                        let app = app_arc.lock().unwrap();
+                        if let Some(panel) = &app.panel {
+                            panel.show_settings();
+                        }
+                    }
+                }
                 IDM_TOGGLE_BALL => {
                     toggle_floating_ball();
                 }
@@ -465,22 +482,40 @@ unsafe extern "system" fn host_wnd_proc(
                 IDM_FONT_SCALE_130 => {
                     set_font_scale(1.30);
                 }
-                IDM_POLL_1500 => {
-                    set_poll_interval(1500);
+                IDM_POLL_30S => {
+                    set_poll_interval(30_000);
                 }
-                IDM_POLL_3000 => {
-                    set_poll_interval(3000);
+                IDM_POLL_1M => {
+                    set_poll_interval(60_000);
                 }
-                IDM_POLL_10000 => {
-                    set_poll_interval(10000);
+                IDM_POLL_5M => {
+                    set_poll_interval(300_000);
                 }
-                IDM_POLL_30000 => {
-                    set_poll_interval(30000);
+                IDM_POLL_15M => {
+                    set_poll_interval(900_000);
+                }
+                IDM_POLL_30M => {
+                    set_poll_interval(1_800_000);
+                }
+                IDM_POLL_60M => {
+                    set_poll_interval(3_600_000);
                 }
                 IDM_REFRESH => {
                     if let Some(app_arc) = &APP_INSTANCE {
                         let app = app_arc.lock().unwrap();
                         app.manager.refresh();
+                        let snaps = app.manager.get_snapshots();
+                        let ball_on = app.config.enable_floating_ball;
+                        let font_scale = app.config.font_scale;
+                        let poll_ms = app.config.poll_interval_ms;
+                        if let Some(fb) = &app.floating_ball {
+                            if ball_on {
+                                fb.update_devices(&snaps);
+                            }
+                        }
+                        if let Some(panel) = &app.panel {
+                            panel.update_devices(&snaps, ball_on, font_scale, poll_ms);
+                        }
                     }
                 }
                 IDM_EXIT => {
@@ -532,11 +567,101 @@ unsafe extern "system" fn host_wnd_proc(
             }
             0
         }
+        crate::ui::panel::WM_SAVE_TOAST_SETTINGS => {
+            if let Some(state_arc) = &crate::ui::panel::PANEL_STATE {
+                let (enabled, info, warn, crit, gaming) = {
+                    let s = state_arc.lock().unwrap();
+                    (s.enable_toast, s.toast_info, s.toast_warning, s.toast_critical, s.toast_gaming_suppression)
+                };
+                if let Some(app_arc) = &APP_INSTANCE {
+                    let mut app = app_arc.lock().unwrap();
+                    app.config.enable_battery_toast = enabled;
+                    app.config.toast_threshold_info = info;
+                    app.config.toast_threshold_warning = warn;
+                    app.config.toast_threshold_critical = crit;
+                    app.config.toast_gaming_suppression = gaming;
+                    let _ = app.config.save();
+                }
+            }
+            0
+        }
         WM_DESTROY => {
             PostQuitMessage(0);
             0
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+#[derive(Default, Clone)]
+struct AlertTracker {
+    alerted_info: bool,
+    alerted_warn: bool,
+    alerted_crit: bool,
+}
+
+static mut ALERT_TRACKERS: Option<std::collections::HashMap<String, AlertTracker>> = None;
+
+fn check_battery_toast_alerts(snaps: &[devices::types::DeviceSnapshot], t_info: u8, t_warn: u8, t_crit: u8) {
+    unsafe {
+        if ALERT_TRACKERS.is_none() {
+            ALERT_TRACKERS = Some(std::collections::HashMap::new());
+        }
+        let trackers = ALERT_TRACKERS.as_mut().unwrap();
+
+        for dev in snaps {
+            if !dev.battery.online {
+                continue;
+            }
+            let pct = match dev.battery.percentage {
+                Some(p) => p,
+                None => continue,
+            };
+            let charging = dev.battery.charging;
+
+            let tracker = trackers.entry(dev.id.clone()).or_default();
+
+            if charging || pct > t_info {
+                tracker.alerted_info = false;
+                tracker.alerted_warn = false;
+                tracker.alerted_crit = false;
+            } else {
+                if pct <= t_crit {
+                    if !tracker.alerted_crit {
+                        tracker.alerted_crit = true;
+                        tracker.alerted_warn = true;
+                        tracker.alerted_info = true;
+                        crate::ui::toast::ToastNotification::show(
+                            &dev.name,
+                            &format!("当前电量仅剩 {}%，已严重不足！请及时充电或更换电池。", pct),
+                            crate::ui::toast::ToastLevel::Critical,
+                            pct,
+                        );
+                    }
+                } else if pct <= t_warn {
+                    if !tracker.alerted_warn {
+                        tracker.alerted_warn = true;
+                        tracker.alerted_info = true;
+                        crate::ui::toast::ToastNotification::show(
+                            &dev.name,
+                            &format!("当前电量降至 {}%，电量偏低，建议适时充电。", pct),
+                            crate::ui::toast::ToastLevel::Warning,
+                            pct,
+                        );
+                    }
+                } else if pct <= t_info {
+                    if !tracker.alerted_info {
+                        tracker.alerted_info = true;
+                        crate::ui::toast::ToastNotification::show(
+                            &dev.name,
+                            &format!("当前电量已消耗过半，当前剩余 {}%。", pct),
+                            crate::ui::toast::ToastLevel::Info,
+                            pct,
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
