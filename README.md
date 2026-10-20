@@ -41,12 +41,11 @@
   - 基于 M-HUB 专有端点 Feature Report `0x11`（XOR 0xFF 双向掩码校验）。
   - 发送指令 `0x06` 直连读取当前电池百分比、物理充电状态以及当前连接模式（2.4G / 有线 / 蓝牙）。
 
-### 5. VXE / VGN / Kysona 系列电竞无线鼠标 (2.4G 无线 / USB 有线)
-- **支持品牌/型号**：VXE 蜻蜓 R1 / R1 Pro / R1 SE、VGN 蜻蜓 F1 系列、Kysona M600 等。
-- **协议原理**：
-  - 采用 Linux 内核级 Kysona / Compx 驱动通讯协议（Report ID `0x08` 指令 `0x04`）。
-  - 实时解析电池容量百分比、充电指示以及高精度硬件电压（mV）。
-
+### 5. VXE / VGN / ATK 全系电竞无线鼠标 (2.4G 无线 / USB 有线)
+- **支持品牌/型号**：VXE 蜻蜓 R1 / R1 Pro / R1 SE+、VXE MAD R / Major Plus、VGN 蜻蜓 F1 / F2 系列、ATK F1 / A9 / Zero 系列，以及采用同款 Nordic/Compx 方案的造品 Zaopin Z2、Scyrox V8、达尔优 A950 等。
+- **协议原理 (双代协议全面适配)**：
+  - **一代 Nordic 52840 (17字节 0x08 0x04 协议)**：覆盖绝大多数主流无线鼠（VXE R1、VGN F1/F2、MAD R、ATK F1 等），自动提取电量百分比、有线状态及电池毫伏值。
+  - **二代 Nordic 54L15 (64字节 0x72 0x07 8K协议)**：适配 ATK Zero 等新一代 8K 旗舰无线鼠标及其 8K 专用 Dongle。
 ### 6. Windows 标准通用 HID 电量外设规范 (Standard HID Power)
 - **支持设备**：实现了 Windows 官方标准 HID 电池规范（UsagePage `0x0084` / `0x0085`）的第三方外设。
 

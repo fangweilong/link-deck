@@ -133,9 +133,11 @@ fn main() {
         println!("3. 迈从 MCHOSE 全系电竞无线鼠标 (2.4G 无线 / 有线)");
         println!("   - 协议原理: M-HUB 专有 Feature Report 0x11 指令 0x06 (XOR 0xFF 掩码通信)");
         println!("   - 典型设备: 迈从 A5 / A5 Pro / A5 Pro Max、AX5 / AX5 Pro、G3、A7 Ultra、L7、M7 等");
-        println!("4. VXE / VGN / Kysona 系列电竞无线鼠标 (2.4G 无线 / 有线)");
-        println!("   - 协议原理: Linux 内核级 Kysona / Compx 专有 Report 0x08 指令 0x04");
-        println!("   - 典型设备: VXE 蜻蜓 R1 / R1 Pro / R1 SE、VGN 蜻蜓 F1 系列、Kysona M600 等");
+        println!("4. VXE / VGN / ATK 全系电竞无线鼠标 (2.4G 无线 / 有线)");
+        println!("   - 协议原理 (双代支持):");
+        println!("     * 第1代 Nordic 52840 (17字节 0x08/0x04 协议): VXE 蜻蜓 R1 / R1 Pro / SE+、VGN 蜻蜓 F1 / F2 系列、VXE MAD R、ATK F1 / A9 等");
+        println!("     * 第2代 Nordic 54L15 (64字节 0x72/0x07 8K协议): ATK Zero 等 8K 旗舰无线鼠标");
+        println!("     * 方案扩展支持: Zaopin 造品 Z2、Scyrox V8、达尔优 A950 系列、G-Wolves 等");
         println!("5. 赛技 Saiggi / Xenta / Areson 双模无线鼠标 (2.4G 无线 / 有线)");
         println!("   - 协议原理: Xenta COL03 Report 0x03 心跳探针与电量异步捕获");
         println!("   - 典型设备: 赛技 TM015、Areson 方案、凌阳方案等无线鼠标");
