@@ -1,50 +1,65 @@
 #![allow(unsafe_op_in_unsafe_fn, static_mut_refs, dead_code, unused_variables)]
 
-use crate::devices::types::{ConnectionMode, DeviceKind, DeviceSnapshot};
+use crate::devices::types::{ConnectionMode, DeviceSnapshot};
+use crate::ui::clipboard::copy_text_to_clipboard;
+use crate::ui::panel_render::{render_action_btn, render_choice_pill, render_device_card};
 use std::mem;
 use std::ptr;
 use std::sync::{Arc, Mutex};
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
-    CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, RoundRect,
-    SelectObject, SetBkColor, SetBkMode, SetTextColor, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT,
-    DT_RIGHT, DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_NORMAL, HDC, HFONT, PAINTSTRUCT, PS_SOLID,
-    SRCCOPY, TRANSPARENT,
+    CreateRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect,
+    RoundRect, SelectClipRgn, SelectObject, SetBkColor, SetBkMode, SetTextColor,
+    DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_NORMAL, HDC,
+    HFONT, PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-    GetMessageW, GetSystemMetrics, GetWindowTextW, IsDialogMessageW, LoadCursorW, PostMessageW,
-    RegisterClassExW, SendMessageW, SetForegroundWindow, SetWindowTextW, ShowWindow, TranslateMessage,
-    CS_HREDRAW, CS_VREDRAW, ES_AUTOHSCROLL, ICON_BIG, ICON_SMALL, IDC_ARROW, IsIconic, SM_CXSCREEN,
-    SM_CYSCREEN, SW_HIDE, SW_RESTORE, SW_SHOW, WM_CLOSE, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETFONT, WM_SETICON,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
+    GetMessageW, GetSystemMetrics, GetWindowRect, GetWindowTextW, IsDialogMessageW, LoadCursorW,
+    PostMessageW, RegisterClassExW, SendMessageW, SetForegroundWindow, SetWindowTextW, ShowWindow,
+    TranslateMessage, CS_HREDRAW, CS_VREDRAW, ES_AUTOHSCROLL, ICON_BIG, ICON_SMALL, IDC_ARROW,
+    IsIconic, MINMAXINFO, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_RESTORE, SW_SHOW,
+    WM_CLOSE, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO,
+    WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETFONT, WM_SETICON,
+    WM_SIZE, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
+    WS_POPUP, WS_SYSMENU, WS_VISIBLE,
+    SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
 };
+// No native scrollbar API: the panel draws its own compact thumb.
+pub const MIN_PANEL_WIDTH: i32 = 480;
+pub const MIN_PANEL_HEIGHT: i32 = 400;
+pub const PANEL_WIDTH: i32 = 640;
+pub const PANEL_HEIGHT: i32 = 680;
+/// Logical height of the settings flow (last pill bottom + bottom padding).
+pub const SETTINGS_CONTENT_HEIGHT: i32 = 700;
 
-pub const PANEL_WIDTH: i32 = 530;
-pub const PANEL_HEIGHT: i32 = 580;
-
-// Custom message for renaming device alias from GUI: wParam = &id, lParam = &new_name
+// Custom messages exchanged with the hidden host window.
+pub const WM_SAVE_PANEL_SIZE: u32 = 0x8000 + 105;
+pub const WM_SAVE_UI_DENSITY: u32 = 0x8000 + 106;
+pub const WM_SAVE_DASHBOARD_PREFS: u32 = 0x8000 + 107;
+pub const WM_SAVE_ONBOARDING: u32 = 0x8000 + 108;
+pub const WM_SAVE_ACCENT_THEME: u32 = 0x8000 + 109;
 pub const WM_DEVICE_RENAME: u32 = 0x8000 + 101;
-// Custom message for persisting toast settings to config
 pub const WM_SAVE_TOAST_SETTINGS: u32 = 0x8000 + 104;
-const CLR_BG: COLORREF = 0x00161412; // #121416
-const CLR_HEADER: COLORREF = 0x00221E1A; // #1A1E22
-const CLR_CARD: COLORREF = 0x00201B18; // #181B20
-const CLR_CARD_BORDER: COLORREF = 0x003A322C; // #2C323A
-const CLR_TEXT: COLORREF = 0x00F4F4F4;
-const CLR_MUTED: COLORREF = 0x00B0A8A0;
-const CLR_ACCENT: COLORREF = 0x00E08030; // Orange / Cyan
-const CLR_GREEN: COLORREF = 0x0081B910;
-const CLR_YELLOW: COLORREF = 0x000B9EF5;
-const CLR_RED: COLORREF = 0x004444EF;
-const CLR_CYAN: COLORREF = 0x00D4B606;
-const CLR_BTN_BG: COLORREF = 0x002C241E;
-const CLR_BTN_HOVER: COLORREF = 0x003E332A;
-const CLR_BTN_ACTIVE: COLORREF = 0x00524438;
+
+// wParam packs filter in bits 0..7 and sort in bits 8..15.
+pub(super) const CLR_BG: COLORREF = 0x00161412;
+pub(super) const CLR_HEADER: COLORREF = 0x00221E1A;
+pub(super) const CLR_CARD: COLORREF = 0x00201B18;
+pub(super) const CLR_CARD_BORDER: COLORREF = 0x003A322C;
+pub(super) const CLR_TEXT: COLORREF = 0x00F4F4F4;
+pub(super) const CLR_MUTED: COLORREF = 0x00B0A8A0;
+pub(super) const CLR_ACCENT: COLORREF = 0x00E08030;
+pub(super) const CLR_GREEN: COLORREF = 0x0081B910;
+pub(super) const CLR_YELLOW: COLORREF = 0x000B9EF5;
+pub(super) const CLR_RED: COLORREF = 0x004444EF;
+pub(super) const CLR_CYAN: COLORREF = 0x00D4B606;
+pub(super) const CLR_BTN_BG: COLORREF = 0x002C241E;
+pub(super) const CLR_BTN_HOVER: COLORREF = 0x003E332A;
+pub(super) const CLR_BTN_ACTIVE: COLORREF = 0x00524438;
 
 pub struct PanelWindow {
     pub hwnd: HWND,
@@ -59,8 +74,18 @@ pub struct PanelStateData {
     pub floating_ball_enabled: bool,
     pub font_scale: f32,
     pub poll_interval_ms: u64,
+    pub ui_density: crate::config::UiDensity,
+    pub scroll_y: i32,
+    pub settings_scroll_y: i32,
+    pub refresh_status: String,
+    pub next_refresh_seconds: u64,
+    pub device_filter: crate::config::DeviceFilter,
+    pub device_sort: crate::config::DeviceSort,
+    pub accent_theme: crate::config::AccentTheme,
+    pub show_onboarding: bool,
+    pub selected_device_id: Option<String>,
     pub host_hwnd: HWND,
-    pub active_tab: usize, // 0 = Devices, 1 = Settings
+    pub active_tab: usize,
     pub enable_toast: bool,
     pub toast_info: u8,
     pub toast_warning: u8,
@@ -89,11 +114,12 @@ impl PanelWindow {
             wcx.hCursor = LoadCursorW(ptr::null_mut(), IDC_ARROW);
             wcx.lpszClassName = class_name.as_ptr();
             RegisterClassExW(&wcx);
-
             let screen_w = GetSystemMetrics(SM_CXSCREEN);
             let screen_h = GetSystemMetrics(SM_CYSCREEN);
-            let start_x = (screen_w - PANEL_WIDTH) / 2;
-            let start_y = (screen_h - PANEL_HEIGHT) / 2;
+            let panel_width = config.panel_width.clamp(MIN_PANEL_WIDTH, screen_w.max(MIN_PANEL_WIDTH));
+            let panel_height = config.panel_height.clamp(MIN_PANEL_HEIGHT, screen_h.max(MIN_PANEL_HEIGHT));
+            let start_x = (screen_w - panel_width) / 2;
+            let start_y = (screen_h - panel_height) / 2;
 
             let state_data = Arc::new(Mutex::new(PanelStateData {
                 devices: Vec::new(),
@@ -102,6 +128,16 @@ impl PanelWindow {
                 floating_ball_enabled: config.enable_floating_ball,
                 font_scale: config.font_scale,
                 poll_interval_ms: config.poll_interval_ms,
+                ui_density: config.ui_density,
+                scroll_y: 0,
+                settings_scroll_y: 0,
+                refresh_status: "就绪 · 可立即刷新".to_string(),
+                next_refresh_seconds: config.poll_interval_ms / 1000,
+                device_filter: config.device_filter,
+                device_sort: config.device_sort,
+                accent_theme: config.accent_theme,
+                show_onboarding: config.show_onboarding,
+                selected_device_id: None,
                 host_hwnd,
                 active_tab: 0,
                 enable_toast: config.enable_battery_toast,
@@ -117,11 +153,11 @@ impl PanelWindow {
                 WS_EX_APPWINDOW,
                 class_name.as_ptr(),
                 title_wide.as_ptr(),
-                WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                 start_x,
                 start_y,
-                PANEL_WIDTH,
-                PANEL_HEIGHT,
+                panel_width,
+                panel_height,
                 ptr::null_mut(),
                 ptr::null_mut(),
                 instance,
@@ -148,6 +184,7 @@ impl PanelWindow {
         ball_enabled: bool,
         font_scale: f32,
         poll_interval_ms: u64,
+        ui_density: crate::config::UiDensity,
     ) {
         unsafe {
             if let Some(state_arc) = &PANEL_STATE {
@@ -156,6 +193,27 @@ impl PanelWindow {
                 state.floating_ball_enabled = ball_enabled;
                 state.font_scale = font_scale;
                 state.poll_interval_ms = poll_interval_ms;
+                state.next_refresh_seconds = poll_interval_ms / 1000;
+                state.ui_density = ui_density;
+                let filtered_count = prepare_devices(state.devices.clone(), state.device_filter, state.device_sort).len();
+                let mut client: RECT = mem::zeroed();
+                GetClientRect(self.hwnd, &mut client);
+                let viewport = (client.bottom - client.top - 132).max(1);
+                let step = match state.ui_density {
+                    crate::config::UiDensity::Compact => 96,
+                    crate::config::UiDensity::Spacious => 134,
+                    crate::config::UiDensity::Standard => 114,
+                };
+                let content = filtered_count as i32 * step;
+                state.scroll_y = state.scroll_y.min((content - viewport).max(0));
+            }
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(self.hwnd, ptr::null(), 0);
+        }
+    }
+    pub fn set_refresh_status(&self, status: impl Into<String>) {
+        unsafe {
+            if let Some(state_arc) = &PANEL_STATE {
+                state_arc.lock().unwrap().refresh_status = status.into();
             }
             windows_sys::Win32::Graphics::Gdi::InvalidateRect(self.hwnd, ptr::null(), 0);
         }
@@ -222,6 +280,99 @@ impl PanelWindow {
     }
 }
 
+unsafe fn dismiss_onboarding(host: HWND) {
+    if let Some(state_arc) = &PANEL_STATE {
+        state_arc.lock().unwrap().show_onboarding = false;
+    }
+    if !host.is_null() {
+        PostMessageW(host, WM_SAVE_ONBOARDING, 0, 0);
+    }
+}
+
+unsafe fn set_panel_density(hwnd: HWND, host: HWND, density: crate::config::UiDensity) {
+    if let Some(state_arc) = &PANEL_STATE {
+        let mut state = state_arc.lock().unwrap();
+        state.ui_density = density;
+    }
+    if !host.is_null() {
+        PostMessageW(host, WM_SAVE_UI_DENSITY, density as WPARAM, 0);
+    }
+    windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+}
+
+fn prepare_devices(
+    mut devices: Vec<DeviceSnapshot>,
+    filter: crate::config::DeviceFilter,
+    sort: crate::config::DeviceSort,
+) -> Vec<DeviceSnapshot> {
+    devices.retain(|dev| match filter {
+        crate::config::DeviceFilter::All => true,
+        crate::config::DeviceFilter::LowBattery => dev.battery.percentage.map(|p| p < 30).unwrap_or(false),
+        crate::config::DeviceFilter::Charging => dev.battery.charging || dev.battery.charging_source.is_charging(),
+        crate::config::DeviceFilter::Bluetooth => dev.connection == ConnectionMode::Bluetooth,
+        crate::config::DeviceFilter::Wireless => dev.connection == ConnectionMode::Wireless24G,
+    });
+    devices.sort_by(|a, b| match sort {
+        crate::config::DeviceSort::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        crate::config::DeviceSort::Battery => a.battery.percentage.unwrap_or(101).cmp(&b.battery.percentage.unwrap_or(101)),
+        crate::config::DeviceSort::Updated => b.battery.last_updated.cmp(&a.battery.last_updated),
+        crate::config::DeviceSort::Priority => {
+            let key = |d: &DeviceSnapshot| (if !d.battery.online { 3 } else if d.battery.percentage.map(|p| p < 30).unwrap_or(false) { 0 } else if d.battery.charging { 1 } else { 2 }, d.name.to_lowercase());
+            key(a).cmp(&key(b))
+        }
+    });
+    devices
+}
+
+/// Maximum device-tab scroll offset. Uses the filtered list so it always
+/// matches what is actually painted.
+unsafe fn device_max_scroll(hwnd: HWND, state: &PanelStateData) -> i32 {
+    let mut client: RECT = mem::zeroed();
+    GetClientRect(hwnd, &mut client);
+    let viewport = (client.bottom - client.top - 132).max(1);
+    let step = match state.ui_density {
+        crate::config::UiDensity::Compact => 96,
+        crate::config::UiDensity::Spacious => 134,
+        crate::config::UiDensity::Standard => 114,
+    };
+    let count = prepare_devices(state.devices.clone(), state.device_filter, state.device_sort).len();
+    ((count as i32 * step) - viewport).max(0)
+}
+
+/// Settings content is a fixed-height flow; viewport excludes header and footer.
+unsafe fn settings_max_scroll(hwnd: HWND) -> i32 {
+    let mut client: RECT = mem::zeroed();
+    GetClientRect(hwnd, &mut client);
+    let viewport = (client.bottom - client.top - 132).max(1);
+    (SETTINGS_CONTENT_HEIGHT - viewport).max(0)
+}
+
+unsafe fn set_dashboard_preferences(hwnd: HWND, host: HWND, filter: crate::config::DeviceFilter, sort: crate::config::DeviceSort) {
+    if let Some(state_arc) = &PANEL_STATE {
+        let mut state = state_arc.lock().unwrap();
+        state.device_filter = filter;
+        state.device_sort = sort;
+        let max_scroll = device_max_scroll(hwnd, &state);
+        state.scroll_y = state.scroll_y.min(max_scroll);
+    }
+    if !host.is_null() {
+        let filter_code = match filter { crate::config::DeviceFilter::All => 0, crate::config::DeviceFilter::LowBattery => 1, crate::config::DeviceFilter::Charging => 2, crate::config::DeviceFilter::Bluetooth => 3, crate::config::DeviceFilter::Wireless => 4 };
+        let sort_code = match sort { crate::config::DeviceSort::Priority => 0, crate::config::DeviceSort::Name => 1, crate::config::DeviceSort::Battery => 2, crate::config::DeviceSort::Updated => 3 };
+        PostMessageW(host, WM_SAVE_DASHBOARD_PREFS, (filter_code | (sort_code << 8)) as WPARAM, 0);
+    }
+    windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+}
+
+unsafe fn set_accent_theme(hwnd: HWND, host: HWND, theme: crate::config::AccentTheme) {
+    if let Some(state_arc) = &PANEL_STATE {
+        state_arc.lock().unwrap().accent_theme = theme;
+    }
+    if !host.is_null() {
+        PostMessageW(host, WM_SAVE_ACCENT_THEME, theme as WPARAM, 0);
+    }
+    windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+}
+
 pub unsafe fn draw_text_clean(hdc: HDC, text: &str, rect: &mut RECT, format: u32) {
     let wide: Vec<u16> = text.encode_utf16().collect();
     DrawTextW(hdc, wide.as_ptr(), wide.len() as i32, rect, format);
@@ -246,6 +397,8 @@ pub unsafe fn create_clear_font(size: i32, bold: bool) -> HFONT {
     )
 }
 
+
+
 unsafe extern "system" fn panel_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -254,6 +407,91 @@ unsafe extern "system" fn panel_wnd_proc(
 ) -> LRESULT {
     match msg {
         WM_ERASEBKGND => 1,
+        WM_GETMINMAXINFO => {
+            let info = lparam as *mut MINMAXINFO;
+            if !info.is_null() {
+                (*info).ptMinTrackSize.x = MIN_PANEL_WIDTH;
+                (*info).ptMinTrackSize.y = MIN_PANEL_HEIGHT;
+            }
+            0
+        }
+        WM_SIZE => {
+            if wparam != 1 {
+                windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+            }
+            0
+        }
+        WM_VSCROLL => {
+            let code = (wparam & 0xFFFF) as i32;
+            let thumb_pos = ((wparam >> 16) & 0xFFFF) as i32;
+            if let Some(state_arc) = &PANEL_STATE {
+                let mut state = state_arc.lock().unwrap();
+                let mut client: RECT = mem::zeroed();
+                GetClientRect(hwnd, &mut client);
+                let viewport = (client.bottom - client.top - 132).max(1);
+                let on_devices = state.active_tab == 0;
+                let step = match state.ui_density {
+                    crate::config::UiDensity::Compact => 96,
+                    crate::config::UiDensity::Spacious => 134,
+                    crate::config::UiDensity::Standard => 114,
+                };
+                let line_step = if on_devices { step / 3 } else { 48 };
+                let max_scroll = if on_devices {
+                    device_max_scroll(hwnd, &state)
+                } else {
+                    settings_max_scroll(hwnd)
+                };
+                let mut pos = if on_devices { state.scroll_y } else { state.settings_scroll_y };
+                match code {
+                    x if x == SB_LINEUP        => pos -= line_step,
+                    x if x == SB_LINEDOWN      => pos += line_step,
+                    x if x == SB_PAGEUP        => pos -= viewport,
+                    x if x == SB_PAGEDOWN      => pos += viewport,
+                    x if x == SB_TOP           => pos = 0,
+                    x if x == SB_BOTTOM        => pos = max_scroll,
+                    x if x == SB_THUMBTRACK    => pos = thumb_pos,
+                    x if x == SB_THUMBPOSITION => pos = thumb_pos,
+                    _ => {}
+                }
+                let clamped = pos.clamp(0, max_scroll);
+                if on_devices {
+                    state.scroll_y = clamped;
+                } else {
+                    state.settings_scroll_y = clamped;
+                }
+            }
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+            0
+        }
+        WM_EXITSIZEMOVE => {
+            let mut r: RECT = mem::zeroed();
+            GetWindowRect(hwnd, &mut r);
+            let (w, h, host) = if let Some(state_arc) = &PANEL_STATE {
+                let state = state_arc.lock().unwrap();
+                (r.right - r.left, r.bottom - r.top, state.host_hwnd)
+            } else {
+                (0, 0, ptr::null_mut())
+            };
+            if !host.is_null() {
+                PostMessageW(host, WM_SAVE_PANEL_SIZE, w as WPARAM, h as LPARAM);
+            }
+            0
+        }
+        WM_MOUSEWHEEL => {
+            let delta = ((wparam >> 16) as i16) as i32;
+            if let Some(state_arc) = &PANEL_STATE {
+                let mut state = state_arc.lock().unwrap();
+                if state.active_tab == 0 {
+                    let max_scroll = device_max_scroll(hwnd, &state);
+                    state.scroll_y = (state.scroll_y - delta / 3).clamp(0, max_scroll);
+                } else {
+                    let max_scroll = settings_max_scroll(hwnd);
+                    state.settings_scroll_y = (state.settings_scroll_y - delta / 3).clamp(0, max_scroll);
+                }
+            }
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+            0
+        }
         WM_CLOSE => {
             if let Some(state_arc) = &PANEL_STATE {
                 let mut state = state_arc.lock().unwrap();
@@ -292,25 +530,24 @@ unsafe extern "system" fn panel_wnd_proc(
 
             SetBkMode(mem_dc, TRANSPARENT as i32);
 
-            let (devices, ball_on, font_scale, poll_ms, hover_btn, active_tab, enable_toast, toast_info, toast_warn, toast_crit, toast_gaming) =
+            let (raw_devices, ball_on, font_scale, poll_ms, hover_btn, active_tab, enable_toast, toast_info, toast_warn, toast_crit, toast_gaming, ui_density, scroll_y, settings_scroll_y, refresh_status, device_filter, device_sort, accent_theme, show_onboarding, selected_device_id) =
                 if let Some(state_arc) = &PANEL_STATE {
                     let state = state_arc.lock().unwrap();
-                    (
-                        state.devices.clone(),
-                        state.floating_ball_enabled,
-                        state.font_scale,
-                        state.poll_interval_ms,
-                        state.hover_btn,
-                        state.active_tab,
-                        state.enable_toast,
-                        state.toast_info,
-                        state.toast_warning,
-                        state.toast_critical,
-                        state.toast_gaming_suppression,
-                    )
+                    (state.devices.clone(), state.floating_ball_enabled, state.font_scale,
+                        state.poll_interval_ms, state.hover_btn, state.active_tab,
+                        state.enable_toast, state.toast_info, state.toast_warning,
+                        state.toast_critical, state.toast_gaming_suppression,
+                        state.ui_density, state.scroll_y, state.settings_scroll_y, state.refresh_status.clone(),
+                        state.device_filter, state.device_sort, state.accent_theme, state.show_onboarding,
+                        state.selected_device_id.clone())
                 } else {
-                    (Vec::new(), false, 1.15, 300_000, 0, 0, true, 50, 30, 10, true)
+                    (Vec::new(), false, 1.15, 300_000, 0, 0, true, 50, 30, 10, true,
+                        crate::config::UiDensity::Standard, 0, 0, "就绪 · 可立即刷新".to_string(),
+                        crate::config::DeviceFilter::All, crate::config::DeviceSort::Priority,
+                        crate::config::AccentTheme::Orange, true, None)
                 };
+            let raw_count = raw_devices.len();
+            let devices = prepare_devices(raw_devices, device_filter, device_sort);
 
             // Header Title
             let font_h1 = create_clear_font((19.0 * font_scale).round() as i32, true);
@@ -342,15 +579,35 @@ unsafe extern "system" fn panel_wnd_proc(
             render_choice_pill(mem_dc, width - 215, 18, 92, 28, "📊 设备监控", active_tab == 0, hover_btn == 201, font_scale);
             render_choice_pill(mem_dc, width - 110, 18, 92, 28, "⚙️ 偏好设置", active_tab == 1, hover_btn == 202, font_scale);
             if active_tab == 0 {
+                if show_onboarding && raw_count == 0 {
+                    let onboarding_brush = CreateSolidBrush(CLR_CARD);
+                    let onboarding_rect = RECT { left: 28, top: 106, right: width - 28, bottom: 280 };
+                    FillRect(mem_dc, &onboarding_rect, onboarding_brush);
+                    DeleteObject(onboarding_brush);
+                    SetTextColor(mem_dc, CLR_TEXT);
+                    let onboarding_font = create_clear_font((16.0 * font_scale).round() as i32, true);
+                    let old_onboarding = SelectObject(mem_dc, onboarding_font);
+                    let mut title = RECT { left: 48, top: 124, right: width - 48, bottom: 150 };
+                    draw_text_clean(mem_dc, "欢迎使用 LinkDeck", &mut title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                    SelectObject(mem_dc, font_sub);
+                    SetTextColor(mem_dc, CLR_MUTED);
+                    let mut body = RECT { left: 48, top: 158, right: width - 48, bottom: 220 };
+                    draw_text_clean(mem_dc, "它会在后台读取支持的键盘、鼠标、耳机和蓝牙设备电量。\n可通过悬浮球或托盘打开控制中心。", &mut body, DT_LEFT);
+                    render_action_btn(mem_dc, 48, 232, 150, 30, "开始使用", false, font_scale);
+                    SelectObject(mem_dc, old_onboarding);
+                    DeleteObject(onboarding_font);
+                }
                 // --- TAB 0: DEVICE DASHBOARD ---
-                for (idx, dev) in devices.iter().take(3).enumerate() {
-                    let y_card = 74 + idx as i32 * 114;
-                    let icon = match dev.kind {
-                        DeviceKind::Keyboard => "⌨️",
-                        DeviceKind::Mouse => "🖱️",
-                        DeviceKind::Headset => "🎧",
-                        _ => "📱",
-                    };
+                let (card_h, card_step) = match ui_density {
+                    crate::config::UiDensity::Compact => (88, 96),
+                    crate::config::UiDensity::Spacious => (124, 134),
+                    crate::config::UiDensity::Standard => (106, 114),
+                };
+                let content_clip = CreateRectRgn(0, 66, width, (height - 58).max(67));
+                SelectClipRgn(mem_dc, content_clip);
+                for (idx, dev) in devices.iter().enumerate() {
+                    let y_card = 74 + idx as i32 * card_step - scroll_y;
+                    if y_card + card_h < 66 || y_card > height - 58 { continue; }
                     let protocol = match dev.connection {
                         ConnectionMode::Bluetooth => "Windows 蓝牙电池服务 (GATT / HFP)",
                         ConnectionMode::Wireless24G if dev.id.contains("rk") => "Compx 2.4G 键盘直连协议",
@@ -363,23 +620,45 @@ unsafe extern "system" fn panel_wnd_proc(
                         ConnectionMode::Wired => "USB 有线直连通信",
                         ConnectionMode::Unknown => "标准 HID 电量服务",
                     };
-                    let is_hover_edit = hover_btn == (100 + idx as i32);
-                    render_device_card(
-                        mem_dc,
-                        20,
-                        y_card,
-                        width - 40,
-                        106,
-                        &dev.name,
-                        icon,
-                        protocol,
-                        Some(dev),
-                        font_scale,
-                        is_hover_edit,
-                    );
+                    render_device_card(mem_dc, 20, y_card, width - 40, card_h,
+                        &dev.name, dev.kind.icon(), protocol, Some(dev), font_scale,
+                        hover_btn == (100 + idx as i32), hover_btn == (200 + idx as i32));
+                    if selected_device_id.as_deref() == Some(dev.id.as_str()) {
+                        render_action_btn(mem_dc, 20, y_card + card_h - 28, 120, 22, "已选中 · 详情", false, font_scale);
+                    }
                 }
+                let content_h = (devices.len() as i32 * card_step).max(1);
+                let viewport_h = (height - 132).max(1);
+                if content_h > viewport_h {
+                    let track_x = width - 10;
+                    let track_brush = CreateSolidBrush(CLR_CARD_BORDER);
+                    let track = RECT { left: track_x, top: 70, right: track_x + 4, bottom: height - 60 };
+                    FillRect(mem_dc, &track, track_brush);
+                    DeleteObject(track_brush);
+                    let thumb_h = ((viewport_h * viewport_h) / content_h).max(24);
+                    let max_thumb_y = viewport_h - thumb_h;
+                    let max_scroll = (content_h - viewport_h).max(1);
+                    let thumb_y = 70 + ((scroll_y * max_thumb_y) / max_scroll);
+                    let thumb_brush = CreateSolidBrush(CLR_ACCENT);
+                    let thumb = RECT { left: track_x - 1, top: thumb_y, right: track_x + 5, bottom: thumb_y + thumb_h };
+                    FillRect(mem_dc, &thumb, thumb_brush);
+                    DeleteObject(thumb_brush);
+                }
+                SelectClipRgn(mem_dc, ptr::null_mut());
+                DeleteObject(content_clip);
 
                 if devices.is_empty() {
+                    let (head_line, tip_line) = if raw_count > 0 {
+                        (
+                            "当前筛选条件下没有匹配的设备",
+                            "已扫描到设备，但被筛选器隐藏。点击“偏好设置 → 设备列表”将筛选切回“全部”。",
+                        )
+                    } else {
+                        (
+                            "未检测到已适配的 2.4G 外设或在线蓝牙设备",
+                            "已适配: 罗技/雷蛇全系 · RK/狼蛛键盘 · 迈从/VXE/达尔优鼠标 · 赛技 · 全系蓝牙\n提示: 多模外设切至蓝牙模式可直接读取；可在终端运行 --protocols 查看完整清单",
+                        )
+                    };
                     SetTextColor(mem_dc, CLR_TEXT);
                     let font_empty_title = create_clear_font((15.0 * font_scale).round() as i32, true);
                     let old_empty_f = SelectObject(mem_dc, font_empty_title);
@@ -389,7 +668,7 @@ unsafe extern "system" fn panel_wnd_proc(
                         right: width - 20,
                         bottom: 156,
                     };
-                    draw_text_clean(mem_dc, "未检测到已适配的 2.4G 外设或在线蓝牙设备", &mut emp_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+                    draw_text_clean(mem_dc, head_line, &mut emp_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
                     SelectObject(mem_dc, old_empty_f);
                     DeleteObject(font_empty_title);
 
@@ -402,60 +681,48 @@ unsafe extern "system" fn panel_wnd_proc(
                         right: width - 20,
                         bottom: 226,
                     };
-                    draw_text_clean(mem_dc, "已适配: 罗技/雷蛇全系 · RK/狼蛛键盘 · 迈从/VXE/达尔优鼠标 · 赛技 · 全系蓝牙\n提示: 多模外设切至蓝牙模式可直接读取；可在终端运行 --protocols 查看完整清单", &mut emp_tip_rect, DT_CENTER);
+                    draw_text_clean(mem_dc, tip_line, &mut emp_tip_rect, DT_CENTER);
                     SelectObject(mem_dc, old_tip_f);
                     DeleteObject(font_empty_tip);
+                    if raw_count > 0 {
+                        render_action_btn(mem_dc, (width - 160) / 2, 240, 160, 32, "显示全部设备", hover_btn == 9, font_scale);
+                    }
                 }
 
-                // Dashboard Footer: Instant Refresh & Settings Button
-                render_action_btn(
-                    mem_dc,
-                    20,
-                    height - 48,
-                    160,
-                    34,
-                    "🔄 立即刷新设备",
-                    hover_btn == 1,
-                    font_scale,
-                );
-
-                render_action_btn(
-                    mem_dc,
-                    190,
-                    height - 48,
-                    130,
-                    34,
-                    "⚙️ 偏好设置",
-                    hover_btn == 2,
-                    font_scale,
-                );
+                // Dashboard footer is painted after the content clip and stays visible at every height.
+                let footer_rect = RECT { left: 0, top: (height - 62).max(0), right: width, bottom: height };
+                let footer_brush = CreateSolidBrush(CLR_HEADER);
+                FillRect(mem_dc, &footer_rect, footer_brush);
+                DeleteObject(footer_brush);
+                render_action_btn(mem_dc, 20, height - 48, 160, 34, "刷新设备", hover_btn == 1, font_scale);
+                render_action_btn(mem_dc, 190, height - 48, 130, 34, "偏好设置", hover_btn == 2, font_scale);
+                SetTextColor(mem_dc, if refresh_status.starts_with("刷新失败") { CLR_RED } else { CLR_MUTED });
+                let mut status_rect = RECT { left: 340, top: height - 42, right: width - 160, bottom: height - 18 };
+                draw_text_clean(mem_dc, &refresh_status, &mut status_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
             } else {
-                // --- TAB 1: DEDICATED SETTINGS VIEW ---
+                // Clip to scrollable area; render_settings_view applies -scroll_y to every coord directly.
+                let settings_clip = CreateRectRgn(0, 66, width, (height - 62).max(67));
+                SelectClipRgn(mem_dc, settings_clip);
                 render_settings_view(
-                    mem_dc,
-                    width,
-                    height,
-                    font_scale,
-                    poll_ms,
-                    ball_on,
-                    enable_toast,
-                    toast_info,
-                    toast_warn,
-                    toast_crit,
-                    toast_gaming,
-                    hover_btn,
+                    mem_dc, width, height, font_scale, poll_ms, ball_on,
+                    enable_toast, toast_info, toast_warn, toast_crit, toast_gaming,
+                    ui_density, device_filter, device_sort, accent_theme, settings_scroll_y, hover_btn,
                 );
+                SelectClipRgn(mem_dc, ptr::null_mut());
+                DeleteObject(settings_clip);
+                // Footer "返回" button is outside the scroll clip — always visible.
+                render_action_btn(mem_dc, 20, height - 48, 150, 34, "◀ 返回设备监控", hover_btn == 90, font_scale);
             }
 
-            // Version info at bottom right
+            // Version label has its own right-aligned slot; it never shares button bounds.
             SetTextColor(mem_dc, CLR_MUTED);
             let mut ver_rect = RECT {
-                left: width - 140,
+                left: width - 150,
                 top: height - 42,
                 right: width - 20,
                 bottom: height - 18,
             };
-            draw_text_clean(mem_dc, concat!("v", env!("CARGO_PKG_VERSION"), " (Rust)"), &mut ver_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+            draw_text_clean(mem_dc, concat!("v", env!("CARGO_PKG_VERSION"), " (Rust)"), &mut ver_rect, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
 
             // Blit
             BitBlt(hdc, 0, 0, width, height, mem_dc, 0, 0, SRCCOPY);
@@ -501,44 +768,74 @@ unsafe extern "system" fn panel_wnd_proc(
                     } else if x >= 190 && x <= 320 {
                         new_hover = 2;
                     }
+                } else if y >= 240 && y <= 272
+                    && x >= (width - 160) / 2 && x <= (width - 160) / 2 + 160
+                    && PANEL_STATE.as_ref().is_some_and(|sa| {
+                        let s = sa.lock().unwrap();
+                        !s.devices.is_empty()
+                            && prepare_devices(s.devices.clone(), s.device_filter, s.device_sort).is_empty()
+                    })
+                {
+                    new_hover = 9;
                 } else {
-                    for idx in 0..3 {
-                        let card_y = 74 + idx * 114;
-                        if y >= card_y + 10 && y <= card_y + 32 {
-                            let btn_x = 20 + (width - 40) - 190;
-                            if x >= btn_x && x <= btn_x + 58 {
-                                new_hover = 100 + idx;
-                                break;
-                            }
+                    let (card_step, scroll_y, device_count) = if let Some(state_arc) = &PANEL_STATE {
+                        let state = state_arc.lock().unwrap();
+                        let step = match state.ui_density {
+                            crate::config::UiDensity::Compact => 96,
+                            crate::config::UiDensity::Spacious => 134,
+                            crate::config::UiDensity::Standard => 114,
+                        };
+                        (step, state.scroll_y, state.devices.len())
+                    } else { (114, 0, 0) };
+                    for idx in 0..device_count {
+                        let card_y = 74 + idx as i32 * card_step - scroll_y;
+                        if y >= card_y + 10 && y <= card_y + 32 && x >= width - 210 && x <= width - 152 {
+                            new_hover = 100 + idx as i32;
+                            break;
                         }
                     }
                 }
             } else {
-                // Settings View Hover
-                if y >= 115 && y <= 146 {
+                // Settings hover coordinates are translated by the scroll offset.
+                let scroll_y = PANEL_STATE.as_ref().and_then(|state| state.lock().ok().map(|s| s.settings_scroll_y)).unwrap_or(0);
+                let content_y = y + scroll_y;
+                if content_y >= 115 && content_y <= 146 {
                     if x >= 20 && x <= 92 { new_hover = 30; }
                     else if x >= 98 && x <= 170 { new_hover = 31; }
                     else if x >= 176 && x <= 254 { new_hover = 32; }
                     else if x >= 260 && x <= 338 { new_hover = 33; }
                     else if x >= 344 && x <= 422 { new_hover = 34; }
                     else if x >= 428 && x <= 506 { new_hover = 35; }
-                } else if y >= 195 && y <= 226 {
+                } else if content_y >= 195 && content_y <= 226 {
                     if x >= 20 && x <= 112 { new_hover = 40; }
                     else if x >= 120 && x <= 212 { new_hover = 41; }
                     else if x >= 220 && x <= 312 { new_hover = 42; }
-                } else if y >= 275 && y <= 308 {
-                    if x >= 20 && x <= 200 { new_hover = 50; }
-                } else if y >= 356 && y <= 388 {
+                } else if content_y >= 275 && content_y <= 308 && x >= 20 && x <= 200 { new_hover = 50; }
+                else if content_y >= 356 && content_y <= 388 {
                     if x >= 20 && x <= 180 { new_hover = 60; }
                     else if x >= 190 && x <= 380 { new_hover = 61; }
-                } else if y >= 392 && y <= 424 {
+                } else if content_y >= 392 && content_y <= 424 {
                     if x >= 20 && x <= 125 { new_hover = 70; }
                     else if x >= 135 && x <= 240 { new_hover = 71; }
                     else if x >= 250 && x <= 355 { new_hover = 72; }
                     else if x >= 365 && x <= 505 { new_hover = 80; }
-                } else if y >= height - 48 && y <= height - 14 {
-                    if x >= 20 && x <= 180 { new_hover = 90; }
-                }
+                } else if content_y >= 478 && content_y <= 504 {
+                    if x >= 20 && x <= 110 { new_hover = 100; }
+                    else if x >= 118 && x <= 208 { new_hover = 101; }
+                    else if x >= 216 && x <= 306 { new_hover = 102; }
+                } else if content_y >= 550 && content_y <= 576 {
+                    if x >= 20 && x <= 92 { new_hover = 120; }
+                    else if x >= 98 && x <= 182 { new_hover = 121; }
+                    else if x >= 188 && x <= 272 { new_hover = 122; }
+                    else if x >= 278 && x <= 350 { new_hover = 123; }
+                    else if x >= 356 && x <= 428 { new_hover = 124; }
+                    else if x >= 434 && x <= 516 { new_hover = 125; }
+                } else if content_y >= 622 && content_y <= 648 {
+                    if x >= 20 && x <= 110 { new_hover = 130; }
+                    else if x >= 118 && x <= 208 { new_hover = 131; }
+                    else if x >= 216 && x <= 306 { new_hover = 132; }
+                    else if x >= 314 && x <= 404 { new_hover = 133; }
+                } else if y >= height - 48 && y <= height - 14 && x >= 20 && x <= 180 { new_hover = 90; }
             }
 
             if let Some(state_arc) = &PANEL_STATE {
@@ -559,11 +856,11 @@ unsafe extern "system" fn panel_wnd_proc(
             let width = rect.right - rect.left;
             let height = rect.bottom - rect.top;
 
-            let (host, active_tab) = if let Some(state_arc) = &PANEL_STATE {
+            let (host, active_tab, show_onboarding, device_count) = if let Some(state_arc) = &PANEL_STATE {
                 let s = state_arc.lock().unwrap();
-                (s.host_hwnd, s.active_tab)
+                (s.host_hwnd, s.active_tab, s.show_onboarding, s.devices.len())
             } else {
-                (ptr::null_mut(), 0)
+                (ptr::null_mut(), 0, false, 0)
             };
 
             // 1. Top Header Tabs
@@ -586,9 +883,28 @@ unsafe extern "system" fn panel_wnd_proc(
             }
 
             if active_tab == 0 {
-                // Device Dashboard Actions
-                if y >= height - 48 && y <= height - 14 {
+                let filtered_empty = PANEL_STATE.as_ref().is_some_and(|sa| {
+                    let s = sa.lock().unwrap();
+                    !s.devices.is_empty()
+                        && prepare_devices(s.devices.clone(), s.device_filter, s.device_sort).is_empty()
+                });
+                if filtered_empty
+                    && y >= 240 && y <= 272
+                    && x >= (width - 160) / 2 && x <= (width - 160) / 2 + 160
+                {
+                    let sort = PANEL_STATE.as_ref()
+                        .and_then(|sa| sa.lock().ok().map(|s| s.device_sort))
+                        .unwrap_or(crate::config::DeviceSort::Priority);
+                    set_dashboard_preferences(hwnd, host, crate::config::DeviceFilter::All, sort);
+                } else if show_onboarding && device_count == 0 && y >= 228 && y <= 266 && x >= 40 && x <= 210 {
+                    dismiss_onboarding(host);
+                    windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+                } else if y >= height - 48 && y <= height - 14 {
                     if x >= 20 && x <= 180 {
+                        if let Some(state_arc) = &PANEL_STATE {
+                            state_arc.lock().unwrap().refresh_status = "正在刷新设备…".to_string();
+                        }
+                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
                         if !host.is_null() {
                             PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, crate::ui::tray::IDM_REFRESH as _, 0);
                         }
@@ -603,12 +919,28 @@ unsafe extern "system" fn panel_wnd_proc(
                     let mut clicked_card = None;
                     if let Some(state_arc) = &PANEL_STATE {
                         let state = state_arc.lock().unwrap();
-                        for (idx, dev) in state.devices.iter().take(3).enumerate() {
-                            let card_y = 74 + idx as i32 * 114;
+                        let card_step = match state.ui_density {
+                            crate::config::UiDensity::Compact => 96,
+                            crate::config::UiDensity::Spacious => 134,
+                            crate::config::UiDensity::Standard => 114,
+                        };
+                        for (idx, dev) in state.devices.iter().enumerate() {
+                            let card_y = 74 + idx as i32 * card_step - state.scroll_y;
                             if y >= card_y + 10 && y <= card_y + 32 {
-                                let btn_x = 20 + (width - 40) - 190;
-                                if x >= btn_x && x <= btn_x + 58 {
+                                let copy_x = width - 274;
+                                let edit_x = width - 210;
+                                if x >= copy_x && x <= copy_x + 58 {
+                                    let detail = format!("{}\n连接: {}\nVID/PID: {:04X}/{:04X}\n路径: {}", dev.name, dev.connection.as_str(), dev.vendor_id, dev.product_id, dev.path);
+                                    let _ = copy_text_to_clipboard(hwnd, &detail);
+                                    break;
+                                } else if x >= edit_x && x <= edit_x + 58 {
                                     clicked_card = Some((dev.id.clone(), dev.name.clone()));
+                                    break;
+                                } else if x >= 20 && x <= width - 20 {
+                                    if let Some(state_arc) = &PANEL_STATE {
+                                        state_arc.lock().unwrap().selected_device_id = Some(dev.id.clone());
+                                    }
+                                    windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
                                     break;
                                 }
                             }
@@ -622,7 +954,10 @@ unsafe extern "system" fn panel_wnd_proc(
                 }
             } else {
                 // Settings View Actions
-                if y >= 115 && y <= 146 {
+                // All content y-coords rendered with -scroll_y; reverse here for hit-test.
+                let scroll_y_hit = if let Some(sa) = &PANEL_STATE { sa.lock().unwrap().settings_scroll_y } else { 0 };
+                let ey = y + scroll_y_hit;
+                if ey >= 115 && ey <= 146 {
                     let cmd = if x >= 20 && x <= 92 {
                         crate::ui::tray::IDM_POLL_30S
                     } else if x >= 98 && x <= 170 {
@@ -641,7 +976,7 @@ unsafe extern "system" fn panel_wnd_proc(
                     if cmd > 0 && !host.is_null() {
                         PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, cmd as _, 0);
                     }
-                } else if y >= 195 && y <= 226 {
+                } else if ey >= 195 && ey <= 226 {
                     let cmd = if x >= 20 && x <= 112 {
                         crate::ui::tray::IDM_FONT_SCALE_100
                     } else if x >= 120 && x <= 212 {
@@ -654,11 +989,11 @@ unsafe extern "system" fn panel_wnd_proc(
                     if cmd > 0 && !host.is_null() {
                         PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, cmd as _, 0);
                     }
-                } else if y >= 275 && y <= 308 {
+                } else if ey >= 275 && ey <= 308 {
                     if x >= 20 && x <= 200 && !host.is_null() {
                         PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, crate::ui::tray::IDM_TOGGLE_BALL as _, 0);
                     }
-                } else if y >= 356 && y <= 388 {
+                } else if ey >= 356 && ey <= 388 {
                     if x >= 20 && x <= 180 {
                         if let Some(state_arc) = &PANEL_STATE {
                             let mut s = state_arc.lock().unwrap();
@@ -678,7 +1013,7 @@ unsafe extern "system" fn panel_wnd_proc(
                         }
                         windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
                     }
-                } else if y >= 392 && y <= 424 {
+                } else if ey >= 392 && ey <= 424 {
                     if x >= 20 && x <= 125 {
                         if let Some(state_arc) = &PANEL_STATE {
                             let mut s = state_arc.lock().unwrap();
@@ -726,6 +1061,40 @@ unsafe extern "system" fn panel_wnd_proc(
                             28,
                         );
                     }
+                } else if ey >= 474 && ey <= 504 {
+                    let density = if x >= 20 && x <= 110 { Some(crate::config::UiDensity::Compact) }
+                        else if x >= 118 && x <= 208 { Some(crate::config::UiDensity::Standard) }
+                        else if x >= 216 && x <= 306 { Some(crate::config::UiDensity::Spacious) }
+                        else { None };
+                    if let Some(density) = density { set_panel_density(hwnd, host, density); }
+                } else if ey >= 546 && ey <= 576 {
+                    let filter = if x >= 20 && x <= 92 { Some(crate::config::DeviceFilter::All) }
+                        else if x >= 98 && x <= 182 { Some(crate::config::DeviceFilter::LowBattery) }
+                        else if x >= 188 && x <= 272 { Some(crate::config::DeviceFilter::Charging) }
+                        else if x >= 278 && x <= 350 { Some(crate::config::DeviceFilter::Bluetooth) }
+                        else if x >= 356 && x <= 428 { Some(crate::config::DeviceFilter::Wireless) }
+                        else { None };
+                    if let Some(filter) = filter {
+                        let sort = PANEL_STATE.as_ref().and_then(|state| state.lock().ok().map(|s| s.device_sort)).unwrap_or(crate::config::DeviceSort::Priority);
+                        set_dashboard_preferences(hwnd, host, filter, sort);
+                    }
+                } else if ey >= 582 && ey <= 612 {
+                    let sort = if x >= 20 && x <= 102 { Some(crate::config::DeviceSort::Priority) }
+                        else if x >= 110 && x <= 192 { Some(crate::config::DeviceSort::Name) }
+                        else if x >= 200 && x <= 282 { Some(crate::config::DeviceSort::Battery) }
+                        else if x >= 290 && x <= 372 { Some(crate::config::DeviceSort::Updated) }
+                        else { None };
+                    if let Some(sort) = sort {
+                        let filter = PANEL_STATE.as_ref().and_then(|state| state.lock().ok().map(|s| s.device_filter)).unwrap_or(crate::config::DeviceFilter::All);
+                        set_dashboard_preferences(hwnd, host, filter, sort);
+                    }
+                } else if ey >= 636 && ey <= 666 {
+                    let theme = if x >= 20 && x <= 110 { Some(crate::config::AccentTheme::Orange) }
+                        else if x >= 118 && x <= 208 { Some(crate::config::AccentTheme::Blue) }
+                        else if x >= 216 && x <= 306 { Some(crate::config::AccentTheme::Purple) }
+                        else if x >= 314 && x <= 404 { Some(crate::config::AccentTheme::Green) }
+                        else { None };
+                    if let Some(theme) = theme { set_accent_theme(hwnd, host, theme); }
                 } else if y >= height - 48 && y <= height - 14 {
                     if x >= 20 && x <= 180 {
                         if let Some(state_arc) = &PANEL_STATE {
@@ -754,407 +1123,110 @@ unsafe fn render_settings_view(
     toast_warn: u8,
     toast_crit: u8,
     toast_gaming: bool,
+    ui_density: crate::config::UiDensity,
+    device_filter: crate::config::DeviceFilter,
+    device_sort: crate::config::DeviceSort,
+    accent_theme: crate::config::AccentTheme,
+    scroll_y: i32,
     hover_btn: i32,
 ) {
-    SetBkMode(mem_dc, TRANSPARENT as i32);
-
-    // Section 1: 定时通信间隔
+    let sy = scroll_y;
     let f_title = create_clear_font((14.0 * font_scale).round() as i32, true);
     let old_f = SelectObject(mem_dc, f_title);
     SetTextColor(mem_dc, CLR_TEXT);
-    let mut s1_t = RECT { left: 20, top: 76, right: width - 20, bottom: 96 };
+    let mut s1_t = RECT { left: 20, top: 76 - sy, right: width - 20, bottom: 96 - sy };
     draw_text_clean(mem_dc, "1. 定时通信间隔 (后台巡检轮询)", &mut s1_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
     let f_desc = create_clear_font((12.0 * font_scale).round() as i32, false);
     SelectObject(mem_dc, f_desc);
     SetTextColor(mem_dc, CLR_MUTED);
-    let mut s1_d = RECT { left: 20, top: 96, right: width - 20, bottom: 114 };
+    let mut s1_d = RECT { left: 20, top: 96 - sy, right: width - 20, bottom: 114 - sy };
     draw_text_clean(mem_dc, "外设电量消耗慢，推荐长周期以极致省电；随时点击'立即刷新'可秒级直读当前电量。", &mut s1_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    render_choice_pill(mem_dc, 20,  118 - sy, 72, 26, "30s 调试",  poll_ms <= 45_000,                           hover_btn == 30, font_scale);
+    render_choice_pill(mem_dc, 98,  118 - sy, 72, 26, "1m 快速",   poll_ms > 45_000 && poll_ms <= 120_000,      hover_btn == 31, font_scale);
+    render_choice_pill(mem_dc, 176, 118 - sy, 78, 26, "5m 推荐",   poll_ms > 120_000 && poll_ms <= 600_000,     hover_btn == 32, font_scale);
+    render_choice_pill(mem_dc, 260, 118 - sy, 78, 26, "15m 适中",  poll_ms > 600_000 && poll_ms <= 1_200_000,   hover_btn == 33, font_scale);
+    render_choice_pill(mem_dc, 344, 118 - sy, 78, 26, "30m 省电",  poll_ms > 1_200_000 && poll_ms <= 2_700_000, hover_btn == 34, font_scale);
+    render_choice_pill(mem_dc, 428, 118 - sy, 78, 26, "1h 极省",   poll_ms > 2_700_000,                         hover_btn == 35, font_scale);
 
-    render_choice_pill(mem_dc, 20, 118, 72, 26, "30s 调试", poll_ms <= 45_000, hover_btn == 30, font_scale);
-    render_choice_pill(mem_dc, 98, 118, 72, 26, "1m 快速", poll_ms > 45_000 && poll_ms <= 120_000, hover_btn == 31, font_scale);
-    render_choice_pill(mem_dc, 176, 118, 78, 26, "5m 推荐", poll_ms > 120_000 && poll_ms <= 600_000, hover_btn == 32, font_scale);
-    render_choice_pill(mem_dc, 260, 118, 78, 26, "15m 适中", poll_ms > 600_000 && poll_ms <= 1_200_000, hover_btn == 33, font_scale);
-    render_choice_pill(mem_dc, 344, 118, 78, 26, "30m 省电", poll_ms > 1_200_000 && poll_ms <= 2_700_000, hover_btn == 34, font_scale);
-    render_choice_pill(mem_dc, 428, 118, 78, 26, "1h 极省", poll_ms > 2_700_000, hover_btn == 35, font_scale);
-
-    // Section 2: 界面显示字号
-    SelectObject(mem_dc, f_title);
-    SetTextColor(mem_dc, CLR_TEXT);
-    let mut s2_t = RECT { left: 20, top: 156, right: width - 20, bottom: 176 };
+    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
+    let mut s2_t = RECT { left: 20, top: 156 - sy, right: width - 20, bottom: 176 - sy };
     draw_text_clean(mem_dc, "2. 界面显示字号 (ClearType 次像素渲染)", &mut s2_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
-    SelectObject(mem_dc, f_desc);
-    SetTextColor(mem_dc, CLR_MUTED);
-    let mut s2_d = RECT { left: 20, top: 176, right: width - 20, bottom: 194 };
+    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
+    let mut s2_d = RECT { left: 20, top: 176 - sy, right: width - 20, bottom: 194 - sy };
     draw_text_clean(mem_dc, "Windows 微软雅黑高分屏抗锯齿次像素渲染字体缩放比例：", &mut s2_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
     let is_s100 = font_scale <= 1.05;
     let is_s115 = font_scale > 1.05 && font_scale <= 1.22;
     let is_s130 = font_scale > 1.22;
-    render_choice_pill(mem_dc, 20, 198, 92, 26, "100% 标准", is_s100, hover_btn == 40, font_scale);
-    render_choice_pill(mem_dc, 120, 198, 92, 26, "115% 适中", is_s115, hover_btn == 41, font_scale);
-    render_choice_pill(mem_dc, 220, 198, 92, 26, "130% 放大", is_s130, hover_btn == 42, font_scale);
+    render_choice_pill(mem_dc, 20,  198 - sy, 92, 26, "100% 标准", is_s100, hover_btn == 40, font_scale);
+    render_choice_pill(mem_dc, 120, 198 - sy, 92, 26, "115% 适中", is_s115, hover_btn == 41, font_scale);
+    render_choice_pill(mem_dc, 220, 198 - sy, 92, 26, "130% 放大", is_s130, hover_btn == 42, font_scale);
 
-    // Section 3: 桌面贴边悬浮球
-    SelectObject(mem_dc, f_title);
-    SetTextColor(mem_dc, CLR_TEXT);
-    let mut s3_t = RECT { left: 20, top: 236, right: width - 20, bottom: 256 };
+    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
+    let mut s3_t = RECT { left: 20, top: 236 - sy, right: width - 20, bottom: 256 - sy };
     draw_text_clean(mem_dc, "3. 桌面贴边悬浮球", &mut s3_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
-    SelectObject(mem_dc, f_desc);
-    SetTextColor(mem_dc, CLR_MUTED);
-    let mut s3_d = RECT { left: 20, top: 256, right: width - 20, bottom: 274 };
+    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
+    let mut s3_d = RECT { left: 20, top: 256 - sy, right: width - 20, bottom: 274 - sy };
     draw_text_clean(mem_dc, "吸附于屏幕边缘的微型动态能量环胶囊，滚轮切台，悬停滑出抽屉：", &mut s3_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
     let ball_text = if ball_on { "🔘 贴边悬浮球: [已开启]" } else { "⚪ 贴边悬浮球: [已关闭]" };
-    render_choice_pill(mem_dc, 20, 278, 180, 28, ball_text, ball_on, hover_btn == 50, font_scale);
+    render_choice_pill(mem_dc, 20, 278 - sy, 180, 28, ball_text, ball_on, hover_btn == 50, font_scale);
 
-    // Section 4: 低电量 Toast 弹窗通知
-    SelectObject(mem_dc, f_title);
-    SetTextColor(mem_dc, CLR_TEXT);
-    let mut s4_t = RECT { left: 20, top: 318, right: width - 20, bottom: 338 };
+    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
+    let mut s4_t = RECT { left: 20, top: 318 - sy, right: width - 20, bottom: 338 - sy };
     draw_text_clean(mem_dc, "4. 低电量原生 Toast 弹窗通知 (多级预警)", &mut s4_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
-    SelectObject(mem_dc, f_desc);
-    SetTextColor(mem_dc, CLR_MUTED);
-    let mut s4_d = RECT { left: 20, top: 338, right: width - 20, bottom: 356 };
+    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
+    let mut s4_d = RECT { left: 20, top: 338 - sy, right: width - 20, bottom: 356 - sy };
     draw_text_clean(mem_dc, "外设电量跌破阈值时在屏幕右下角弹出 Toast 提醒；全屏或玩游戏时降级/免打扰：", &mut s4_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
     let toast_text = if enable_toast { "🔔 电量弹窗: [已开启]" } else { "🔕 电量弹窗: [已关闭]" };
-    render_choice_pill(mem_dc, 20, 360, 160, 26, toast_text, enable_toast, hover_btn == 60, font_scale);
-
+    render_choice_pill(mem_dc, 20,  360 - sy, 160, 26, toast_text, enable_toast, hover_btn == 60, font_scale);
     let game_text = if toast_gaming { "🎮 游戏全屏免打扰: [已开启]" } else { "🎮 游戏全屏免打扰: [已关闭]" };
-    render_choice_pill(mem_dc, 190, 360, 190, 26, game_text, toast_gaming, hover_btn == 61, font_scale);
-
-    // Row 2: Threshold buttons
+    render_choice_pill(mem_dc, 190, 360 - sy, 190, 26, game_text, toast_gaming,  hover_btn == 61, font_scale);
     let info_str = format!("提示: < {}%", toast_info);
     let warn_str = format!("警告: < {}%", toast_warn);
     let crit_str = format!("危险: < {}%", toast_crit);
-    render_choice_pill(mem_dc, 20, 396, 105, 26, &info_str, true, hover_btn == 70, font_scale);
-    render_choice_pill(mem_dc, 135, 396, 105, 26, &warn_str, true, hover_btn == 71, font_scale);
-    render_choice_pill(mem_dc, 250, 396, 105, 26, &crit_str, true, hover_btn == 72, font_scale);
-    render_choice_pill(mem_dc, 365, 396, 140, 26, "🚀 试发一条Toast", false, hover_btn == 80, font_scale);
+    render_choice_pill(mem_dc, 20,  396 - sy, 105, 26, &info_str,          true, hover_btn == 70, font_scale);
+    render_choice_pill(mem_dc, 135, 396 - sy, 105, 26, &warn_str,          true, hover_btn == 71, font_scale);
+    render_choice_pill(mem_dc, 250, 396 - sy, 105, 26, &crit_str,          true, hover_btn == 72, font_scale);
+    render_choice_pill(mem_dc, 365, 396 - sy, 140, 26, "🚀 试发一条Toast", false, hover_btn == 80, font_scale);
 
-    // Bottom action: Back to devices view
-    render_action_btn(
-        mem_dc,
-        20,
-        height - 48,
-        150,
-        34,
-        "◀ 返回设备监控",
-        hover_btn == 90,
-        font_scale,
-    );
+    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
+    let mut density_title = RECT { left: 20, top: 438 - sy, right: width - 20, bottom: 456 - sy };
+    draw_text_clean(mem_dc, "5. 卡片布局密度", &mut density_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
+    let mut density_desc = RECT { left: 20, top: 456 - sy, right: width - 20, bottom: 474 - sy };
+    draw_text_clean(mem_dc, "紧凑适合小窗口；宽松提供更舒适的信息间距。", &mut density_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    render_choice_pill(mem_dc, 20,  478 - sy, 90, 26, "紧凑布局", matches!(ui_density, crate::config::UiDensity::Compact),  hover_btn == 100, font_scale);
+    render_choice_pill(mem_dc, 118, 478 - sy, 90, 26, "标准布局", matches!(ui_density, crate::config::UiDensity::Standard), hover_btn == 101, font_scale);
+    render_choice_pill(mem_dc, 216, 478 - sy, 90, 26, "宽松布局", matches!(ui_density, crate::config::UiDensity::Spacious), hover_btn == 102, font_scale);
 
+    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
+    let mut dashboard_title = RECT { left: 20, top: 510 - sy, right: width - 20, bottom: 528 - sy };
+    draw_text_clean(mem_dc, "6. 设备列表", &mut dashboard_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
+    let mut dashboard_desc = RECT { left: 20, top: 528 - sy, right: width - 20, bottom: 546 - sy };
+    draw_text_clean(mem_dc, "筛选和排序仅影响显示顺序，不会改变后台扫描。", &mut dashboard_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    render_choice_pill(mem_dc, 20,  550 - sy, 72, 26, "全部",   matches!(device_filter, crate::config::DeviceFilter::All),        hover_btn == 120, font_scale);
+    render_choice_pill(mem_dc, 98,  550 - sy, 84, 26, "低电量", matches!(device_filter, crate::config::DeviceFilter::LowBattery), hover_btn == 121, font_scale);
+    render_choice_pill(mem_dc, 188, 550 - sy, 84, 26, "充电中", matches!(device_filter, crate::config::DeviceFilter::Charging),   hover_btn == 122, font_scale);
+    render_choice_pill(mem_dc, 278, 550 - sy, 72, 26, "蓝牙",   matches!(device_filter, crate::config::DeviceFilter::Bluetooth),  hover_btn == 123, font_scale);
+    render_choice_pill(mem_dc, 356, 550 - sy, 72, 26, "2.4G",   matches!(device_filter, crate::config::DeviceFilter::Wireless),   hover_btn == 124, font_scale);
+    render_choice_pill(mem_dc, 20,  586 - sy, 82, 26, "优先级", matches!(device_sort, crate::config::DeviceSort::Priority),       hover_btn == 125, font_scale);
+    render_choice_pill(mem_dc, 110, 586 - sy, 82, 26, "名称",   matches!(device_sort, crate::config::DeviceSort::Name),           hover_btn == 126, font_scale);
+    render_choice_pill(mem_dc, 200, 586 - sy, 82, 26, "电量",   matches!(device_sort, crate::config::DeviceSort::Battery),        hover_btn == 127, font_scale);
+    render_choice_pill(mem_dc, 290, 586 - sy, 82, 26, "更新时间", matches!(device_sort, crate::config::DeviceSort::Updated),      hover_btn == 128, font_scale);
+
+    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
+    let mut theme_title = RECT { left: 20, top: 618 - sy, right: width - 20, bottom: 636 - sy };
+    draw_text_clean(mem_dc, "7. 主题强调色", &mut theme_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    render_choice_pill(mem_dc, 20,  640 - sy, 90, 26, "橙色", matches!(accent_theme, crate::config::AccentTheme::Orange), hover_btn == 130, font_scale);
+    render_choice_pill(mem_dc, 118, 640 - sy, 90, 26, "蓝色", matches!(accent_theme, crate::config::AccentTheme::Blue),   hover_btn == 131, font_scale);
+    render_choice_pill(mem_dc, 216, 640 - sy, 90, 26, "紫色", matches!(accent_theme, crate::config::AccentTheme::Purple), hover_btn == 132, font_scale);
+    render_choice_pill(mem_dc, 314, 640 - sy, 90, 26, "绿色", matches!(accent_theme, crate::config::AccentTheme::Green),  hover_btn == 133, font_scale);
     SelectObject(mem_dc, old_f);
     DeleteObject(f_title);
     DeleteObject(f_desc);
 }
-unsafe fn render_device_card(
-    hdc: HDC,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    title: &str,
-    icon: &str,
-    protocol: &str,
-    dev: Option<&DeviceSnapshot>,
-    font_scale: f32,
-    hover_edit: bool,
-) {
-    let border_pen = CreatePen(PS_SOLID, 1, CLR_CARD_BORDER);
-    let old_pen = SelectObject(hdc, border_pen);
-    let card_brush = CreateSolidBrush(CLR_CARD);
-    let old_brush = SelectObject(hdc, card_brush);
 
-    RoundRect(hdc, x, y, x + w, y + h, 12, 12);
 
-    SelectObject(hdc, old_brush);
-    DeleteObject(card_brush);
-    SelectObject(hdc, old_pen);
-    DeleteObject(border_pen);
-
-    // Card Title
-    let font_sz_title = (15.0 * font_scale).round() as i32;
-    let font_bold = create_clear_font(font_sz_title, true);
-    let old_font = SelectObject(hdc, font_bold);
-    SetTextColor(hdc, CLR_TEXT);
-    let title_full = format!("{} {}", icon, title);
-    let mut t_rect = RECT {
-        left: x + 16,
-        top: y + 10,
-        right: x + w - 196,
-        bottom: y + 32,
-    };
-    draw_text_clean(hdc, &title_full, &mut t_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-
-    // Rename Button: [✏️ 改名]
-    let btn_x = x + w - 190;
-    let btn_y = y + 11;
-    let btn_w = 58;
-    let btn_h = 20;
-
-    let edit_bg = if hover_edit { CLR_BTN_HOVER } else { CLR_BTN_BG };
-    let edit_brush = CreateSolidBrush(edit_bg);
-    let edit_pen = CreatePen(PS_SOLID, 1, if hover_edit { CLR_ACCENT } else { CLR_CARD_BORDER });
-    let old_p = SelectObject(hdc, edit_pen);
-    let old_b = SelectObject(hdc, edit_brush);
-
-    RoundRect(hdc, btn_x, btn_y, btn_x + btn_w, btn_y + btn_h, 4, 4);
-
-    SelectObject(hdc, old_b);
-    DeleteObject(edit_brush);
-    SelectObject(hdc, old_p);
-    DeleteObject(edit_pen);
-
-    let font_btn = create_clear_font((11.5 * font_scale).round() as i32, false);
-    SelectObject(hdc, font_btn);
-    SetTextColor(hdc, if hover_edit { CLR_TEXT } else { CLR_MUTED });
-    let mut btn_r = RECT {
-        left: btn_x,
-        top: btn_y,
-        right: btn_x + btn_w,
-        bottom: btn_y + btn_h,
-    };
-    draw_text_clean(hdc, "✏️ 改名", &mut btn_r, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-    SelectObject(hdc, old_font);
-    DeleteObject(font_btn);
-
-    // Protocol badge / connection info
-    let font_sz_sub = (12.5 * font_scale).round() as i32;
-    let font_normal = create_clear_font(font_sz_sub, false);
-    SelectObject(hdc, font_normal);
-    SetTextColor(hdc, CLR_MUTED);
-
-    let (conn_str, vid_pid) = if let Some(d) = dev {
-        (
-            d.connection.as_str(),
-            if d.vendor_id > 0 {
-                format!("VID 0x{:04X} : PID 0x{:04X}", d.vendor_id, d.product_id)
-            } else {
-                "系统蓝牙栈".to_string()
-            },
-        )
-    } else {
-        ("未连接", "等待接入...".to_string())
-    };
-
-    let meta_str = format!("模式: {} | {} | {}", conn_str, vid_pid, protocol);
-    let mut m_rect = RECT {
-        left: x + 16,
-        top: y + 33,
-        right: x + w - 16,
-        bottom: y + 52,
-    };
-    draw_text_clean(hdc, &meta_str, &mut m_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-
-    // Battery & status section
-    let (pct, mv, charging, online) = if let Some(d) = dev {
-        (
-            d.battery.percentage,
-            d.battery.voltage_mv,
-            d.battery.charging,
-            d.battery.online,
-        )
-    } else {
-        (None, None, false, false)
-    };
-
-    let (chg_tag, status_color) = if let Some(d) = dev {
-        if d.battery.charging || d.battery.charging_source.is_charging() {
-            (" ⚡", CLR_CYAN)
-        } else if !d.battery.online {
-            (" [待机]", CLR_MUTED)
-        } else {
-            let clr = if let Some(p) = pct {
-                if p >= 50 { CLR_GREEN } else if p >= 20 { CLR_YELLOW } else { CLR_RED }
-            } else {
-                CLR_MUTED
-            };
-            ("", clr)
-        }
-    } else {
-        ("", CLR_MUTED)
-    };
-    // Big Battery Percentage Display
-    let font_sz_big = (24.0 * font_scale).round() as i32;
-    let font_big = create_clear_font(font_sz_big, true);
-    SelectObject(hdc, font_big);
-    SetTextColor(hdc, status_color);
-
-    let p_str = if let Some(p) = pct {
-        format!("{}%{}", p, chg_tag)
-    } else if online {
-        "在线".to_string()
-    } else {
-        "待机休眠".to_string()
-    };
-
-    let mut p_rect = RECT {
-        left: x + w - 160,
-        top: y + 8,
-        right: x + w - 16,
-        bottom: y + 42,
-    };
-    draw_text_clean(hdc, &p_str, &mut p_rect, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
-
-    // Voltage readout / status detail
-    SelectObject(hdc, font_normal);
-    let detail_str = if let Some(d) = dev {
-        if d.battery.charging || d.battery.charging_source.is_charging() {
-            if let Some(v) = mv {
-                format!("供电: 正在充电中 · 电池端电压 {} mV ({:.3} V)", v, v as f32 / 1000.0)
-            } else {
-                "供电: USB 接口供电 · 持续充电中".to_string()
-            }
-        } else if let Some(v) = mv {
-            format!("放电: 锂电池电压 {} mV ({:.3} V) · 放电曲线平稳", v, v as f32 / 1000.0)
-        } else if online {
-            "状态: 正常运行 · 已就绪".to_string()
-        } else {
-            "状态: 处于低功耗省电休眠模式 (触动即醒)".to_string()
-        }
-    } else {
-        "状态: 等待外设接入".to_string()
-    };
-    SetTextColor(hdc, CLR_MUTED);
-    let mut d_rect = RECT {
-        left: x + 16,
-        top: y + 56,
-        right: x + w - 16,
-        bottom: y + 76,
-    };
-    draw_text_clean(hdc, &detail_str, &mut d_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-
-    // Battery Progress Bar
-    let bar_x = x + 16;
-    let bar_y = y + 82;
-    let bar_w = w - 32;
-    let bar_h = 10;
-
-    let bar_bg = CreateSolidBrush(0x00322A26);
-    let bg_r = RECT {
-        left: bar_x,
-        top: bar_y,
-        right: bar_x + bar_w,
-        bottom: bar_y + bar_h,
-    };
-    RoundRect(hdc, bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, 6, 6);
-    FillRect(hdc, &bg_r, bar_bg);
-    DeleteObject(bar_bg);
-
-    let fill_pct = pct.unwrap_or(0) as i32;
-    let fill_w = (bar_w * fill_pct) / 100;
-    if fill_w > 0 {
-        let bar_fg = CreateSolidBrush(status_color);
-        let fg_r = RECT {
-            left: bar_x,
-            top: bar_y,
-            right: bar_x + fill_w,
-            bottom: bar_y + bar_h,
-        };
-        RoundRect(hdc, bar_x, bar_y, bar_x + fill_w, bar_y + bar_h, 6, 6);
-        FillRect(hdc, &fg_r, bar_fg);
-        DeleteObject(bar_fg);
-    }
-
-    SelectObject(hdc, old_font);
-    DeleteObject(font_bold);
-    DeleteObject(font_normal);
-    DeleteObject(font_big);
-}
-
-unsafe fn render_choice_pill(
-    hdc: HDC,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    text: &str,
-    active: bool,
-    hover: bool,
-    font_scale: f32,
-) {
-    let (bg, border_clr, text_clr) = if active {
-        (CLR_BTN_ACTIVE, CLR_ACCENT, CLR_TEXT)
-    } else if hover {
-        (CLR_BTN_HOVER, CLR_MUTED, CLR_TEXT)
-    } else {
-        (CLR_BTN_BG, CLR_CARD_BORDER, CLR_MUTED)
-    };
-
-    let brush = CreateSolidBrush(bg);
-    let pen = CreatePen(PS_SOLID, 1, border_clr);
-    let op = SelectObject(hdc, pen);
-    let ob = SelectObject(hdc, brush);
-
-    RoundRect(hdc, x, y, x + w, y + h, 6, 6);
-
-    SelectObject(hdc, ob);
-    DeleteObject(brush);
-    SelectObject(hdc, op);
-    DeleteObject(pen);
-
-    let font_sz = (12.0 * font_scale).round() as i32;
-    let font_pill = create_clear_font(font_sz, active);
-    let old_font = SelectObject(hdc, font_pill);
-
-    SetTextColor(hdc, text_clr);
-    let mut r = RECT {
-        left: x,
-        top: y,
-        right: x + w,
-        bottom: y + h,
-    };
-    draw_text_clean(hdc, text, &mut r, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-
-    SelectObject(hdc, old_font);
-    DeleteObject(font_pill);
-}
-
-unsafe fn render_action_btn(
-    hdc: HDC,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    text: &str,
-    hover: bool,
-    font_scale: f32,
-) {
-    let btn_bg = if hover { CLR_BTN_HOVER } else { CLR_BTN_BG };
-    let brush = CreateSolidBrush(btn_bg);
-    let border = CreatePen(PS_SOLID, 1, if hover { CLR_ACCENT } else { CLR_CARD_BORDER });
-
-    let old_pen = SelectObject(hdc, border);
-    let old_brush = SelectObject(hdc, brush);
-
-    RoundRect(hdc, x, y, x + w, y + h, 8, 8);
-
-    SelectObject(hdc, old_brush);
-    DeleteObject(brush);
-    SelectObject(hdc, old_pen);
-    DeleteObject(border);
-
-    let font_sz = (13.0 * font_scale).round() as i32;
-    let font = create_clear_font(font_sz, true);
-    let old_font = SelectObject(hdc, font);
-    SetTextColor(hdc, if hover { CLR_TEXT } else { 0x00E0D8D0 });
-
-    let mut r = RECT {
-        left: x,
-        top: y,
-        right: x + w,
-        bottom: y + h,
-    };
-    draw_text_clean(hdc, text, &mut r, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-
-    SelectObject(hdc, old_font);
-    DeleteObject(font);
-}
 
 
 static mut DLG_RESULT_STRING: Option<String> = None;

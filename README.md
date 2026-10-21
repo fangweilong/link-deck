@@ -86,6 +86,14 @@
    - 点击小球底部的 `⚙️ 打开控制中心` 或托盘菜单即可唤起。
    - 包含多设备卡片、高精度毫伏电压读数、协议类型标注，以及内置 **字体大小切换器（100% 标准 / 115% 适中 / 130% 放大）**。
 
+### Dashboard convenience features
+- Manual refresh displays an immediate in-progress state and a completion summary with total, added, and changed device counts.
+- Dashboard preferences support filtering by all, low battery, charging, Bluetooth, or 2.4G devices.
+- Device lists can be sorted by priority, name, battery percentage, or last update time; priority surfaces low-battery online devices first.
+- Clicking a device card selects it for detail-oriented interaction; copy and rename actions remain available on each card.
+- Preferences include compact/standard/spacious density, accent color, notification thresholds, and refresh interval controls.
+- The first-run panel explains the floating ball, tray entry, and supported battery monitoring workflow.
+
 ---
 
 ## 🛠️ 构建与运行

@@ -9,6 +9,28 @@ pub enum DeviceKind {
     Headset,
     Other,
 }
+impl DeviceKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DeviceKind::Keyboard => "键盘",
+            DeviceKind::Mouse => "鼠标",
+            DeviceKind::Keypad => "数字小键盘",
+            DeviceKind::Headset => "无线耳机",
+            DeviceKind::Other => "外设设备",
+        }
+    }
+
+    pub fn icon(&self) -> &'static str {
+        match self {
+            DeviceKind::Keyboard => "⌨️",
+            DeviceKind::Mouse => "🖱️",
+            DeviceKind::Keypad => "🔢",
+            DeviceKind::Headset => "🎧",
+            DeviceKind::Other => "📱",
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnectionMode {
