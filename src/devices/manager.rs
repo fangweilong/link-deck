@@ -15,6 +15,15 @@ use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use std::collections::HashMap;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RefreshResult {
+    pub total: usize,
+    pub added: usize,
+    pub removed: usize,
+    pub changed: usize,
+    pub failed: usize,
+}
+
 
 pub struct DeviceManager {
     devices: Arc<RwLock<Vec<DeviceSnapshot>>>,
@@ -395,7 +404,24 @@ impl DeviceManager {
             }
         }
     }
-}
+
+    pub fn refresh_with_result(&self) -> RefreshResult {
+        let before = self.get_snapshots();
+        self.refresh();
+        let after = self.get_snapshots();
+        let added = after.iter().filter(|dev| !before.iter().any(|old| old.id == dev.id)).count();
+        let removed = before.iter().filter(|old| !after.iter().any(|dev| dev.id == old.id)).count();
+        let changed = after.iter().filter(|dev| {
+            before.iter().find(|old| old.id == dev.id).map(|old| {
+                old.battery.percentage != dev.battery.percentage
+                    || old.battery.online != dev.battery.online
+                    || old.battery.charging != dev.battery.charging
+                    || old.battery.voltage_mv != dev.battery.voltage_mv
+            }).unwrap_or(false)
+        }).count();
+        RefreshResult { total: after.len(), added, removed, changed, failed: 0 }
+    }
+ }
 
 fn push_unique(list: &mut Vec<DeviceSnapshot>, dev: DeviceSnapshot) {
     if !list.iter().any(|d| d.id == dev.id || (!dev.path.is_empty() && d.path == dev.path)) {

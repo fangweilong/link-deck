@@ -333,7 +333,7 @@ fn toggle_floating_ball() {
 
             let snaps = app.manager.get_snapshots();
             if let Some(panel) = &app.panel {
-                panel.update_devices(&snaps, enabled, font_scale, poll_ms);
+                panel.update_devices(&snaps, enabled, font_scale, poll_ms, app.config.ui_density);
             }
         }
     }
@@ -350,7 +350,7 @@ fn set_poll_interval(ms: u64) {
             let scale = app.config.font_scale;
             let snaps = app.manager.get_snapshots();
             if let Some(panel) = &app.panel {
-                panel.update_devices(&snaps, ball_on, scale, ms);
+                panel.update_devices(&snaps, ball_on, scale, ms, app.config.ui_density);
             }
         }
     }
@@ -370,7 +370,7 @@ fn set_font_scale(scale: f32) {
 
             let snaps = app.manager.get_snapshots();
             if let Some(panel) = &app.panel {
-                panel.update_devices(&snaps, ball_on, scale, poll_ms);
+                panel.update_devices(&snaps, ball_on, scale, poll_ms, app.config.ui_density);
             }
         }
     }
@@ -410,7 +410,7 @@ unsafe extern "system" fn host_wnd_proc(
 
                     // Update management panel
                     if let Some(panel) = &app.panel {
-                        panel.update_devices(&snaps, ball_on, font_scale, poll_ms);
+                        panel.update_devices(&snaps, ball_on, font_scale, poll_ms, app.config.ui_density);
                     }
                     // Format tray tooltip
                     let mut tip_lines = Vec::new();
@@ -522,18 +522,20 @@ unsafe extern "system" fn host_wnd_proc(
                 IDM_REFRESH => {
                     if let Some(app_arc) = &APP_INSTANCE {
                         let app = app_arc.lock().unwrap();
-                        app.manager.refresh();
+                        if let Some(panel) = &app.panel {
+                            panel.set_refresh_status("正在刷新设备…");
+                        }
+                        let result = app.manager.refresh_with_result();
                         let snaps = app.manager.get_snapshots();
                         let ball_on = app.config.enable_floating_ball;
                         let font_scale = app.config.font_scale;
                         let poll_ms = app.config.poll_interval_ms;
                         if let Some(fb) = &app.floating_ball {
-                            if ball_on {
-                                fb.update_devices(&snaps);
-                            }
+                            if ball_on { fb.update_devices(&snaps); }
                         }
                         if let Some(panel) = &app.panel {
-                            panel.update_devices(&snaps, ball_on, font_scale, poll_ms);
+                            panel.update_devices(&snaps, ball_on, font_scale, poll_ms, app.config.ui_density);
+                            panel.set_refresh_status(&format!("刷新完成 · {} 台设备 · 新增 {} · 变化 {}", result.total, result.added, result.changed));
                         }
                     }
                 }
@@ -566,7 +568,7 @@ unsafe extern "system" fn host_wnd_proc(
                         }
                     }
                     if let Some(panel) = &app.panel {
-                        panel.update_devices(&snaps, ball_on, font_scale, poll_ms);
+                        panel.update_devices(&snaps, ball_on, font_scale, poll_ms, app.config.ui_density);
                     }
                 }
             }
@@ -580,7 +582,7 @@ unsafe extern "system" fn host_wnd_proc(
                 let font_scale = app.config.font_scale;
                 let poll_ms = app.config.poll_interval_ms;
                 if let Some(panel) = &app.panel {
-                    panel.update_devices(&snaps, ball_on, font_scale, poll_ms);
+                    panel.update_devices(&snaps, ball_on, font_scale, poll_ms, app.config.ui_density);
                     panel.show();
                 }
             }
@@ -601,6 +603,83 @@ unsafe extern "system" fn host_wnd_proc(
                     app.config.toast_gaming_suppression = gaming;
                     let _ = app.config.save();
                 }
+            }
+            0
+        }
+        crate::ui::panel::WM_SAVE_PANEL_SIZE => {
+            let w = wparam as i32;
+            let h = lparam as i32;
+            if w >= 480 && h >= 400 {
+                if let Some(app_arc) = &APP_INSTANCE {
+                    let mut app = app_arc.lock().unwrap();
+                    app.config.set_panel_size(w, h);
+                    let _ = app.config.save();
+                }
+            }
+            0
+        }
+        crate::ui::panel::WM_SAVE_UI_DENSITY => {
+            let density = match wparam {
+                0 => crate::config::UiDensity::Compact,
+                2 => crate::config::UiDensity::Spacious,
+                _ => crate::config::UiDensity::Standard,
+            };
+            if let Some(app_arc) = &APP_INSTANCE {
+                let mut app = app_arc.lock().unwrap();
+                app.config.set_ui_density(density);
+                let _ = app.config.save();
+
+                let snaps = app.manager.get_snapshots();
+                let ball_on = app.config.enable_floating_ball;
+                let font_scale = app.config.font_scale;
+                let poll_ms = app.config.poll_interval_ms;
+                if let Some(panel) = &app.panel {
+                    panel.update_devices(&snaps, ball_on, font_scale, poll_ms, density);
+                }
+            }
+            0
+        }
+        crate::ui::panel::WM_SAVE_DASHBOARD_PREFS => {
+            let filter = match (wparam & 0xFF) as u8 {
+                1 => crate::config::DeviceFilter::LowBattery,
+                2 => crate::config::DeviceFilter::Charging,
+                3 => crate::config::DeviceFilter::Bluetooth,
+                4 => crate::config::DeviceFilter::Wireless,
+                _ => crate::config::DeviceFilter::All,
+            };
+            let sort = match ((wparam >> 8) & 0xFF) as u8 {
+                1 => crate::config::DeviceSort::Name,
+                2 => crate::config::DeviceSort::Battery,
+                3 => crate::config::DeviceSort::Updated,
+                _ => crate::config::DeviceSort::Priority,
+            };
+            if let Some(app_arc) = &APP_INSTANCE {
+                let mut app = app_arc.lock().unwrap();
+                app.config.device_filter = filter;
+                app.config.device_sort = sort;
+                let _ = app.config.save();
+            }
+            0
+        }
+        crate::ui::panel::WM_SAVE_ONBOARDING => {
+            if let Some(app_arc) = &APP_INSTANCE {
+                let mut app = app_arc.lock().unwrap();
+                app.config.show_onboarding = false;
+                let _ = app.config.save();
+            }
+            0
+        }
+        crate::ui::panel::WM_SAVE_ACCENT_THEME => {
+            let theme = match wparam {
+                1 => crate::config::AccentTheme::Blue,
+                2 => crate::config::AccentTheme::Purple,
+                3 => crate::config::AccentTheme::Green,
+                _ => crate::config::AccentTheme::Orange,
+            };
+            if let Some(app_arc) = &APP_INSTANCE {
+                let mut app = app_arc.lock().unwrap();
+                app.config.accent_theme = theme;
+                let _ = app.config.save();
             }
             0
         }

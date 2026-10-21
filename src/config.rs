@@ -2,6 +2,56 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum UiDensity {
+    Compact,
+    #[default]
+    Standard,
+    Spacious,
+}
+
+impl UiDensity {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UiDensity::Compact => "紧凑",
+            UiDensity::Standard => "标准",
+            UiDensity::Spacious => "宽松",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DeviceFilter {
+    #[default]
+    All,
+    LowBattery,
+    Charging,
+    Bluetooth,
+    Wireless,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DeviceSort {
+    #[default]
+    Priority,
+    Name,
+    Battery,
+    Updated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AccentTheme {
+    #[default]
+    Orange,
+    Blue,
+    Purple,
+    Green,
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Whether the edge-sticking floating ball is enabled
@@ -12,6 +62,15 @@ pub struct AppConfig {
     pub poll_interval_ms: u64,
     /// UI Font size scale factor (1.0 = standard, 1.15 = medium, 1.3 = large)
     pub font_scale: f32,
+    /// Management panel window width (default: 640)
+    #[serde(default = "default_panel_width")]
+    pub panel_width: i32,
+    /// Management panel window height (default: 680)
+    #[serde(default = "default_panel_height")]
+    pub panel_height: i32,
+    /// UI layout density (Compact, Standard, Spacious)
+    #[serde(default)]
+    pub ui_density: UiDensity,
     /// Custom device aliases by device id, e.g. {"rk_keyboard_fa70": "我的客制化 RK108"}
     #[serde(default)]
     pub device_aliases: std::collections::HashMap<String, String>,
@@ -30,6 +89,21 @@ pub struct AppConfig {
     /// Suppress topmost during fullscreen / gaming
     #[serde(default = "default_true")]
     pub toast_gaming_suppression: bool,
+    #[serde(default)]
+    pub device_filter: DeviceFilter,
+    #[serde(default)]
+    pub device_sort: DeviceSort,
+    #[serde(default)]
+    pub accent_theme: AccentTheme,
+    #[serde(default = "default_true")]
+    pub show_onboarding: bool,
+}
+
+fn default_panel_width() -> i32 {
+    640
+}
+fn default_panel_height() -> i32 {
+    680
 }
 
 fn default_true() -> bool {
@@ -52,17 +126,32 @@ impl Default for AppConfig {
             floating_ball_y_ratio: 0.75, // Lower-right area above taskbar
             poll_interval_ms: 300_000,   // Default: 5 minutes (300,000 ms)
             font_scale: 1.15,            // Clear, comfortably readable font scale
+            panel_width: 640,
+            panel_height: 680,
+            ui_density: UiDensity::Standard,
             device_aliases: std::collections::HashMap::new(),
             enable_battery_toast: true,
             toast_threshold_info: 50,
             toast_threshold_warning: 30,
             toast_threshold_critical: 10,
             toast_gaming_suppression: true,
+            device_filter: DeviceFilter::All,
+            device_sort: DeviceSort::Priority,
+            accent_theme: AccentTheme::Orange,
+            show_onboarding: true,
         }
     }
 }
-
 impl AppConfig {
+    pub fn set_panel_size(&mut self, width: i32, height: i32) {
+        self.panel_width = width.max(480);
+        self.panel_height = height.max(400);
+    }
+
+    pub fn set_ui_density(&mut self, density: UiDensity) {
+        self.ui_density = density;
+    }
+
     /// Standard user configuration directory: `%APPDATA%\LinkDeck` on Windows,
     /// or `~/.config/linkdeck` as cross-platform fallback.
     pub fn config_dir() -> PathBuf {
@@ -221,5 +310,34 @@ mod tests {
         cfg.set_alias("mouse_1d57_fa60", "");
         assert_eq!(cfg.resolve_alias("mouse_1d57_fa60"), None);
         assert_eq!(cfg.resolve_alias("mouse_1d57_fa61"), None);
+    }
+    #[test]
+    fn test_config_ui_density_and_window_size() {
+        let mut cfg = AppConfig::default();
+        assert_eq!(cfg.panel_width, 640);
+        assert_eq!(cfg.panel_height, 680);
+        assert_eq!(cfg.ui_density, UiDensity::Standard);
+        cfg.set_panel_size(820, 760);
+        cfg.set_ui_density(UiDensity::Compact);
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        let deserialized: AppConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(deserialized.panel_width, 820);
+        assert_eq!(deserialized.panel_height, 760);
+        assert_eq!(deserialized.ui_density, UiDensity::Compact);
+    }
+
+    #[test]
+    fn test_dashboard_preferences_round_trip() {
+        let mut cfg = AppConfig::default();
+        cfg.device_filter = DeviceFilter::LowBattery;
+        cfg.device_sort = DeviceSort::Updated;
+        cfg.accent_theme = AccentTheme::Blue;
+        cfg.show_onboarding = false;
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        let restored: AppConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.device_filter, DeviceFilter::LowBattery);
+        assert_eq!(restored.device_sort, DeviceSort::Updated);
+        assert_eq!(restored.accent_theme, AccentTheme::Blue);
+        assert!(!restored.show_onboarding);
     }
 }
