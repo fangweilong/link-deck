@@ -5,7 +5,8 @@
 //!   2. 与编译期版本号做语义化比较，只有远端更高才提示；
 //!   3. 下载到 %APPDATA%\LinkDeck\LinkDeck-update.exe，校验 MZ 头与体积；
 //!   4. 自替换：把正在运行的 exe 改名成 *.old.exe（Windows 允许重命名运行中文件），
-//!      再把新文件复制回原路径并拉起新进程，旧进程退出；
+//!      再把新文件复制回原路径并拉起新进程，等到新进程写下启动标记后旧进程才退出；
+//!      新进程被拦截、立即崩溃或超时则自动回滚，并记录 %APPDATA%\LinkDeck\update.log；
 //!   5. 下次启动时清理残留的 *.old.exe。
 //! 目标: 不引入额外依赖、不弹控制台、失败时保证原 exe 完好。
 //! ==============================================================================
@@ -246,31 +247,141 @@ pub fn download_latest() -> Result<PathBuf, String> {
     result.map(|_| dest)
 }
 
+/// 新版本进程启动标记（自更新握手文件）
+pub fn update_signal_path() -> PathBuf {
+    crate::config::AppConfig::config_dir().join("update.started")
+}
+
+/// 新版本进程进入 main 后立即调用：让旧进程确认新 exe 真的跑起来了。
+pub fn signal_started() {
+    let _ = fs::create_dir_all(crate::config::AppConfig::config_dir());
+    let _ = fs::write(
+        update_signal_path(),
+        format!("pid={} version={}\n", std::process::id(), current_version()),
+    );
+}
+
+fn clear_signal() {
+    let _ = fs::remove_file(update_signal_path());
+}
+
+fn log_update(message: &str) {
+    use std::io::Write;
+    let path = crate::config::AppConfig::config_dir().join("update.log");
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "[{}] {}", now_epoch(), message);
+    }
+}
+
 /// 用已下载的新 exe 替换当前进程并重启。
 ///
 /// 关键点：Windows 允许重命名正在运行的可执行文件，
-/// 因此顺序为「改名旧文件 → 复制新文件 → 拉起新进程 → 退出」，
-/// 任一步失败都回滚，保证原 exe 不丢。
+/// 因此顺序为「改名旧文件 → 复制新文件 → 拉起新进程并等待启动标记 → 退出」，
+/// 新进程只要没成功跑起来（被拦截、立即崩溃、超时）就回滚，保证始终有一份可用 exe。
 pub fn apply_and_restart(new_exe: &Path) -> Result<(), String> {
     let current = std::env::current_exe().map_err(|e| format!("获取当前程序路径失败: {}", e))?;
+    clear_signal();
     let old = swap_executable(&current, new_exe)?;
-    // 新文件已复制到位，下载缓存不再需要
-    let _ = fs::remove_file(new_exe);
+    log_update(&format!("已写入新版本: {}", current.display()));
 
-    match std::process::Command::new(&current)
-        .arg(AFTER_UPDATE_FLAG)
-        .spawn()
-    {
-        Ok(_) => {
-            // 旧文件在新进程启动后再删，避免杀毒软件扫描期间占用
+    match spawn_new_version(&current) {
+        Ok(pid) => {
+            clear_signal();
+            // 下载缓存与旧文件仅在新进程确认启动后清理；旧文件可能仍被本进程占用，
+            // 由新进程启动时的 cleanup_old_backup 兜底删除。
+            let _ = fs::remove_file(new_exe);
             let _ = fs::remove_file(&old);
+            log_update(&format!("新版本进程 {} 已启动，旧进程退出", pid));
             std::process::exit(0);
         }
-        Err(e) => {
-            // 新进程没起来：恢复旧版本
-            let _ = fs::remove_file(&current);
-            let _ = fs::rename(&old, &current);
-            Err(format!("启动新版本失败: {}（已回滚）", e))
+        Err(err) => {
+            log_update(&format!("新版本启动失败: {}；回滚", err));
+            clear_signal();
+            rollback(&current, &old);
+            Err(format!("{}（已回滚到原版本）", err))
+        }
+    }
+}
+
+/// 拉起新进程并等待它的启动标记；失败时确保不留残进程。
+fn spawn_new_version(current: &Path) -> Result<u32, String> {
+    let signal = update_signal_path();
+    let mut last_err = String::new();
+    for attempt in 0..3 {
+        match std::process::Command::new(current)
+            .arg(AFTER_UPDATE_FLAG)
+            .spawn()
+        {
+            Ok(mut child) => {
+                let pid = child.id();
+                log_update(&format!("启动新版本进程 {} (第 {} 次)", pid, attempt + 1));
+                match wait_for_started(&mut child, &signal, Duration::from_secs(5)) {
+                    Ok(()) => return Ok(pid),
+                    Err(err) => {
+                        // 已经启动过但立即退出/超时，重试同一文件没有意义
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(err);
+                    }
+                }
+            }
+            Err(e) => {
+                last_err = format!("启动新版本失败: {}", e);
+                log_update(&last_err);
+                if attempt < 2 {
+                    std::thread::sleep(Duration::from_millis(400));
+                }
+            }
+        }
+    }
+    Err(last_err)
+}
+
+/// 等待新进程写下启动标记；进程提前退出或超时都视为失败。
+fn wait_for_started(
+    child: &mut std::process::Child,
+    signal: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if signal.exists() {
+            return Ok(());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Err(format!("新版本启动后立即退出（{}）", status));
+            }
+            Ok(None) => {}
+            Err(e) => return Err(format!("无法确认新版本运行状态: {}", e)),
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("等待新版本启动超时".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// 回滚：删除新文件并恢复旧文件；对杀毒软件/索引服务短暂占用做重试。
+fn rollback(current: &Path, old: &Path) {
+    for _ in 0..10 {
+        match fs::remove_file(current) {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => {
+                log_update(&format!("回滚删除新文件失败: {}", e));
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+    }
+    for _ in 0..10 {
+        match fs::rename(old, current) {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => {
+                log_update(&format!("回滚恢复旧文件失败: {}", e));
+                std::thread::sleep(Duration::from_millis(200));
+            }
         }
     }
 }
@@ -301,10 +412,17 @@ pub fn swap_executable(current: &Path, new_exe: &Path) -> Result<PathBuf, String
     Ok(old)
 }
 
-/// 清理上次升级遗留的 `*.old.exe`
+/// 清理上次升级遗留的 `*.old.exe`（旧进程可能还没完全退出，重试几次）
 pub fn cleanup_old_backup() {
     if let Ok(current) = std::env::current_exe() {
-        let _ = fs::remove_file(old_backup_path(&current));
+        let old = old_backup_path(&current);
+        for _ in 0..30 {
+            match fs::remove_file(&old) {
+                Ok(()) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                Err(_) => std::thread::sleep(Duration::from_millis(200)),
+            }
+        }
     }
 }
 
@@ -620,6 +738,43 @@ mod tests {
         fs::write(&new_exe, b"MZ").unwrap();
         assert!(swap_executable(&current, &new_exe).is_err());
         assert_eq!(fs::read(&current).unwrap(), b"original");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wait_for_started_detects_immediate_exit() {
+        let dir = std::env::temp_dir().join(format!("linkdeck-wait-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let signal = dir.join("update.started");
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "exit", "7"])
+            .spawn()
+            .expect("spawn cmd");
+        let err = wait_for_started(&mut child, &signal, Duration::from_secs(2)).unwrap_err();
+        assert!(err.contains("立即退出"), "{err}");
+        let _ = child.wait();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wait_for_started_accepts_signal_and_times_out() {
+        let dir = std::env::temp_dir().join(format!("linkdeck-wait-ok-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let signal = dir.join("update.started");
+
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "ping", "-n", "6", "127.0.0.1"])
+            .spawn()
+            .expect("spawn cmd");
+        // 没有标记文件时必须超时失败
+        assert!(wait_for_started(&mut child, &signal, Duration::from_millis(300)).is_err());
+        // 标记出现后立即成功
+        fs::write(&signal, "pid=1").unwrap();
+        assert!(wait_for_started(&mut child, &signal, Duration::from_secs(2)).is_ok());
+        let _ = child.kill();
+        let _ = child.wait();
         let _ = fs::remove_dir_all(&dir);
     }
 

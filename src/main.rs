@@ -73,10 +73,16 @@ fn main() {
         }
     }
 
+    let args: Vec<String> = std::env::args().collect();
+    // 自更新后的新进程：第一时间写下启动标记，供旧进程确认替换成功。
+    // 必须早于备份清理（旧进程可能还占用 *.old.exe，清理会重试等待）。
+    if args.iter().any(|a| a == update::AFTER_UPDATE_FLAG) {
+        update::signal_started();
+    }
+
     // 任何启动方式都先清理上次自更新遗留的备份
     update::cleanup_old_backup();
 
-    let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--check-update") {
         unsafe {
             AttachConsole(ATTACH_PARENT_PROCESS);
