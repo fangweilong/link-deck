@@ -92,7 +92,7 @@ unsafe extern "system" {
 pub const AFTER_UPDATE_FLAG: &str = "--after-update";
 
 /// GitHub 仓库（发布源）
-const REPO: &str = "fangweilong/links-deck";
+const REPO: &str = "fangweilong/link-deck";
 /// 更新检查间隔
 const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 /// 启动后首次检查的延迟，避开启动高峰
