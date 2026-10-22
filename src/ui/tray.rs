@@ -29,6 +29,7 @@ pub const IDM_POLL_60M: usize = 1025;
 pub const IDM_EXIT: usize = 1004;
 pub const IDM_CHECK_UPDATE: usize = 1030;
 pub const IDM_APPLY_UPDATE: usize = 1031;
+pub const IDM_TOGGLE_AUTOSTART: usize = 1032;
 
 pub struct TrayIcon {
     hwnd: HWND,
@@ -73,7 +74,7 @@ impl TrayIcon {
         }
     }
 
-    pub fn show_context_menu(hwnd: HWND, ball_enabled: bool, _font_scale: f32, _poll_interval_ms: u64) -> usize {
+    pub fn show_context_menu(hwnd: HWND, ball_enabled: bool, auto_start: bool, _font_scale: f32, _poll_interval_ms: u64) -> usize {
         unsafe {
             let mut pt = mem::zeroed();
             GetCursorPos(&mut pt);
@@ -113,6 +114,12 @@ impl TrayIcon {
                 "⚪ 桌面贴边悬浮球: [已关闭]"
             };
             add_item(hmenu, IDM_TOGGLE_BALL, ball_label);
+            let autostart_label = if auto_start {
+                "🚀 开机自动启动: [已开启]"
+            } else {
+                "⚪ 开机自动启动: [已关闭]"
+            };
+            add_item(hmenu, IDM_TOGGLE_AUTOSTART, autostart_label);
             AppendMenuW(hmenu, MF_SEPARATOR, 0, ptr::null());
             add_item(hmenu, IDM_EXIT, "❌ 退出 LinkDeck");
 

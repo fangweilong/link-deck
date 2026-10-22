@@ -100,6 +100,9 @@ pub struct AppConfig {
     /// 启动后自动检查 GitHub Releases 新版本
     #[serde(default = "default_true")]
     pub check_updates: bool,
+    /// 开机（Windows 登录）时自动启动并常驻托盘
+    #[serde(default)]
+    pub auto_start: bool,
 }
 
 fn default_panel_width() -> i32 {
@@ -143,6 +146,7 @@ impl Default for AppConfig {
             accent_theme: AccentTheme::Orange,
             show_onboarding: true,
             check_updates: true,
+            auto_start: false,
         }
     }
 }
@@ -328,6 +332,16 @@ mod tests {
         assert_eq!(deserialized.panel_width, 820);
         assert_eq!(deserialized.panel_height, 760);
         assert_eq!(deserialized.ui_density, UiDensity::Compact);
+    }
+
+    #[test]
+    fn test_auto_start_round_trip() {
+        let mut cfg = AppConfig::default();
+        assert!(!cfg.auto_start);
+        cfg.auto_start = true;
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        let restored: AppConfig = serde_json::from_str(&json).expect("deserialize");
+        assert!(restored.auto_start);
     }
 
     #[test]

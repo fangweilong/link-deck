@@ -88,7 +88,7 @@
 
 ### 自动更新 (单一 exe 自替换)
 - 启动 10 秒后自动检查一次 GitHub Releases，此后每 6 小时轮询；可在 `偏好设置 → 8. 版本与更新` 关闭。
-- 版本比较按语义化版本（`v0.3.0 > v0.2.1`），只有远端更高时才提示，不会重复打扰。
+- 版本比较按语义化版本（`v0.4.0 > v0.3.0`），只有远端更高时才提示，不会重复打扰。
 - 升级流程：WinHTTP 下载 → 校验 `MZ` 头与体积 → 把运行中的 exe 改名为 `*.old.exe` → 复制新文件 → 拉起新进程并退出 → 下次启动清理备份。
 - 任一步失败自动回滚，原 exe 不会丢失；安装在只读目录（如 `Program Files`）时会给出明确提示。
 - 托盘菜单会直接显示「⬆️ 立即升级到 vX.Y.Z」，也可用命令行：
@@ -104,6 +104,8 @@
 - Device lists can be sorted by priority, name, battery percentage, or last update time; priority surfaces low-battery online devices first.
 - Clicking a device card selects it for detail-oriented interaction; copy and rename actions remain available on each card.
 - Preferences include compact/standard/spacious density, accent color, notification thresholds, and refresh interval controls.
+- 开机自启：`偏好设置 → 9. 开机自动启动`（或托盘右键菜单）可随时开启/关闭，写入当前用户 `HKCU\...\CurrentVersion\Run`，无需管理员权限；程序移动或自更新后会按当前 exe 路径自动刷新。
+- 配置文件目录：`偏好设置 → 10. 配置文件目录` 显示 `config.json` 完整路径，点击「打开配置目录」即用资源管理器定位到 `%APPDATA%\LinkDeck`。
 - The first-run panel explains the floating ball, tray entry, and supported battery monitoring workflow.
 
 ---

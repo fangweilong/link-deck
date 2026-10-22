@@ -1,6 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn, static_mut_refs, dead_code, unused_variables)]
 #![windows_subsystem = "windows"]
 
+mod autostart;
 mod config;
 mod devices;
 mod ui;
@@ -17,7 +18,7 @@ use ui::tray::{
     TrayIcon, IDM_EXIT, IDM_FONT_SCALE_100, IDM_FONT_SCALE_115, IDM_FONT_SCALE_130,
     IDM_POLL_1M, IDM_POLL_15M, IDM_POLL_30M, IDM_POLL_30S, IDM_POLL_5M, IDM_POLL_60M,
     IDM_APPLY_UPDATE, IDM_CHECK_UPDATE, IDM_REFRESH, IDM_SHOW_PANEL, IDM_SHOW_SETTINGS,
-    IDM_TOGGLE_BALL, WM_TRAY_CALLBACK,
+    IDM_TOGGLE_BALL, IDM_TOGGLE_AUTOSTART, WM_TRAY_CALLBACK,
 };
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT, WPARAM,
@@ -321,6 +322,8 @@ fn main() {
 
     let _instance_guard = SingleInstanceGuard(single_instance_mutex);
     let config = AppConfig::load();
+    // 让注册表 Run 项与配置保持一致（程序移动/自更新后也刷新为新路径）
+    autostart::sync(config.auto_start);
     let initial_ball_enabled = config.enable_floating_ball;
     let initial_font_scale = config.font_scale;
     let initial_poll_ms = config.poll_interval_ms;
@@ -401,6 +404,31 @@ fn main() {
         while GetMessageW(&mut msg, ptr::null_mut(), 0, 0) > 0 {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
+        }
+    }
+}
+
+fn toggle_autostart() {
+    unsafe {
+        if let Some(app_arc) = &APP_INSTANCE {
+            let next = {
+                let app = app_arc.lock().unwrap();
+                !app.config.auto_start
+            };
+            match autostart::set_enabled(next) {
+                Ok(()) => {
+                    let mut app = app_arc.lock().unwrap();
+                    app.config.auto_start = next;
+                    let _ = app.config.save();
+                    if let Some(state_arc) = &crate::ui::panel::PANEL_STATE {
+                        state_arc.lock().unwrap().auto_start = next;
+                    }
+                    if let Some(panel) = &app.panel {
+                        panel.invalidate();
+                    }
+                }
+                Err(err) => eprintln!("切换开机自启失败: {err}"),
+            }
         }
     }
 }
@@ -552,14 +580,14 @@ unsafe extern "system" fn host_wnd_proc(
         WM_TRAY_CALLBACK => {
             let event = (lparam & 0xFFFF) as u32;
             if event == WM_RBUTTONUP {
-                let (ball_on, font_scale, poll_ms) = if let Some(app_arc) = &APP_INSTANCE {
+                let (ball_on, auto_start, font_scale, poll_ms) = if let Some(app_arc) = &APP_INSTANCE {
                     let cfg = &app_arc.lock().unwrap().config;
-                    (cfg.enable_floating_ball, cfg.font_scale, cfg.poll_interval_ms)
+                    (cfg.enable_floating_ball, cfg.auto_start, cfg.font_scale, cfg.poll_interval_ms)
                 } else {
-                    (false, 1.15, 3000)
+                    (false, false, 1.15, 3000)
                 };
 
-                let cmd = TrayIcon::show_context_menu(hwnd, ball_on, font_scale, poll_ms);
+                let cmd = TrayIcon::show_context_menu(hwnd, ball_on, auto_start, font_scale, poll_ms);
                 if cmd > 0 {
                     PostMessageW(hwnd, WM_COMMAND, cmd, 0);
                 }
@@ -659,6 +687,9 @@ unsafe extern "system" fn host_wnd_proc(
                         }
                     }
                 }
+                IDM_TOGGLE_AUTOSTART => {
+                    toggle_autostart();
+                }
                 IDM_EXIT => {
                     PostQuitMessage(0);
                 }
@@ -725,6 +756,34 @@ unsafe extern "system" fn host_wnd_proc(
                 let mut app = app_arc.lock().unwrap();
                 app.config.check_updates = auto;
                 let _ = app.config.save();
+            }
+            0
+        }
+        crate::ui::panel::WM_SAVE_AUTOSTART => {
+            let desired = crate::ui::panel::PANEL_STATE
+                .as_ref()
+                .map(|sa| sa.lock().unwrap().auto_start)
+                .unwrap_or(false);
+            let applied = autostart::set_enabled(desired);
+            if let Some(app_arc) = &APP_INSTANCE {
+                let mut app = app_arc.lock().unwrap();
+                match applied {
+                    Ok(()) => {
+                        app.config.auto_start = desired;
+                        let _ = app.config.save();
+                    }
+                    Err(err) => {
+                        // 注册表写入失败：回滚开关，避免配置与系统状态不一致
+                        eprintln!("设置开机自启失败: {err}");
+                        let revert = app.config.auto_start;
+                        if let Some(state_arc) = &crate::ui::panel::PANEL_STATE {
+                            state_arc.lock().unwrap().auto_start = revert;
+                        }
+                        if let Some(panel) = &app.panel {
+                            panel.invalidate();
+                        }
+                    }
+                }
             }
             0
         }

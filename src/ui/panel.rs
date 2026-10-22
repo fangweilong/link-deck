@@ -16,6 +16,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
+use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
     GetMessageW, GetSystemMetrics, GetWindowRect, GetWindowTextW, IsDialogMessageW, LoadCursorW,
@@ -25,7 +26,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_CLOSE, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO,
     WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETFONT, WM_SETICON,
     WM_SIZE, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
-    WS_POPUP, WS_SYSMENU, WS_VISIBLE,
+    WS_POPUP, WS_SYSMENU, WS_VISIBLE, SW_SHOWNORMAL,
     SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
 };
 // No native scrollbar API: the panel draws its own compact thumb.
@@ -34,7 +35,7 @@ pub const MIN_PANEL_HEIGHT: i32 = 400;
 pub const PANEL_WIDTH: i32 = 640;
 pub const PANEL_HEIGHT: i32 = 680;
 /// Logical height of the settings flow (last pill bottom + bottom padding).
-pub const SETTINGS_CONTENT_HEIGHT: i32 = 812;
+pub const SETTINGS_CONTENT_HEIGHT: i32 = 980;
 
 // Custom messages exchanged with the hidden host window.
 pub const WM_SAVE_PANEL_SIZE: u32 = 0x8000 + 105;
@@ -43,6 +44,7 @@ pub const WM_SAVE_DASHBOARD_PREFS: u32 = 0x8000 + 107;
 pub const WM_SAVE_ONBOARDING: u32 = 0x8000 + 108;
 pub const WM_SAVE_ACCENT_THEME: u32 = 0x8000 + 109;
 pub const WM_SAVE_UPDATE_PREFS: u32 = 0x8000 + 110;
+pub const WM_SAVE_AUTOSTART: u32 = 0x8000 + 111;
 pub const WM_DEVICE_RENAME: u32 = 0x8000 + 101;
 pub const WM_SAVE_TOAST_SETTINGS: u32 = 0x8000 + 104;
 
@@ -93,6 +95,7 @@ pub struct PanelStateData {
     pub toast_critical: u8,
     pub toast_gaming_suppression: bool,
     pub auto_update: bool,
+    pub auto_start: bool,
 }
 impl PanelWindow {
     pub fn new(
@@ -148,6 +151,7 @@ impl PanelWindow {
                 toast_critical: config.toast_threshold_critical,
                 toast_gaming_suppression: config.toast_gaming_suppression,
                 auto_update: config.check_updates,
+                auto_start: config.auto_start,
             }));
             PANEL_STATE = Some(state_data);
 
@@ -288,6 +292,28 @@ impl PanelWindow {
             ShowWindow(self.hwnd, SW_HIDE);
         }
     }
+}
+
+/// 在资源管理器中打开配置文件所在目录（必要时先创建）。
+unsafe fn open_config_dir() {
+    use std::os::windows::ffi::OsStrExt;
+
+    let dir = crate::config::AppConfig::config_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let operation: Vec<u16> = "open\0".encode_utf16().collect();
+    let path: Vec<u16> = dir
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    ShellExecuteW(
+        ptr::null_mut(),
+        operation.as_ptr(),
+        path.as_ptr(),
+        ptr::null(),
+        ptr::null(),
+        SW_SHOWNORMAL,
+    );
 }
 
 unsafe fn dismiss_onboarding(host: HWND) {
@@ -540,7 +566,7 @@ unsafe extern "system" fn panel_wnd_proc(
 
             SetBkMode(mem_dc, TRANSPARENT as i32);
 
-            let (raw_devices, ball_on, font_scale, poll_ms, hover_btn, active_tab, enable_toast, toast_info, toast_warn, toast_crit, toast_gaming, ui_density, scroll_y, settings_scroll_y, refresh_status, device_filter, device_sort, accent_theme, show_onboarding, selected_device_id, auto_update) =
+            let (raw_devices, ball_on, font_scale, poll_ms, hover_btn, active_tab, enable_toast, toast_info, toast_warn, toast_crit, toast_gaming, ui_density, scroll_y, settings_scroll_y, refresh_status, device_filter, device_sort, accent_theme, show_onboarding, selected_device_id, auto_update, auto_start) =
                 if let Some(state_arc) = &PANEL_STATE {
                     let state = state_arc.lock().unwrap();
                     (state.devices.clone(), state.floating_ball_enabled, state.font_scale,
@@ -549,12 +575,12 @@ unsafe extern "system" fn panel_wnd_proc(
                         state.toast_critical, state.toast_gaming_suppression,
                         state.ui_density, state.scroll_y, state.settings_scroll_y, state.refresh_status.clone(),
                         state.device_filter, state.device_sort, state.accent_theme, state.show_onboarding,
-                        state.selected_device_id.clone(), state.auto_update)
+                        state.selected_device_id.clone(), state.auto_update, state.auto_start)
                 } else {
                     (Vec::new(), false, 1.15, 300_000, 0, 0, true, 50, 30, 10, true,
                         crate::config::UiDensity::Standard, 0, 0, "就绪 · 可立即刷新".to_string(),
                         crate::config::DeviceFilter::All, crate::config::DeviceSort::Priority,
-                        crate::config::AccentTheme::Orange, true, None, true)
+                        crate::config::AccentTheme::Orange, true, None, true, false)
                 };
             let raw_count = raw_devices.len();
             let devices = prepare_devices(raw_devices, device_filter, device_sort);
@@ -717,7 +743,7 @@ unsafe extern "system" fn panel_wnd_proc(
                     mem_dc, width, height, font_scale, poll_ms, ball_on,
                     enable_toast, toast_info, toast_warn, toast_crit, toast_gaming,
                     ui_density, device_filter, device_sort, accent_theme, settings_scroll_y, hover_btn,
-                    auto_update,
+                    auto_update, auto_start,
                 );
                 SelectClipRgn(mem_dc, ptr::null_mut());
                 DeleteObject(settings_clip);
@@ -850,6 +876,10 @@ unsafe extern "system" fn panel_wnd_proc(
                     if x >= 20 && x <= 210 { new_hover = 140; }
                     else if x >= 218 && x <= 314 { new_hover = 141; }
                     else if x >= 322 && x <= 536 && crate::update::has_update() { new_hover = 142; }
+                } else if content_y >= 812 && content_y <= 840 && x >= 20 && x <= 220 {
+                    new_hover = 150;
+                } else if content_y >= 894 && content_y <= 922 && x >= 20 && x <= 200 {
+                    new_hover = 151;
                 } else if y >= height - 48 && y <= height - 14 && x >= 20 && x <= 180 { new_hover = 90; }
             }
 
@@ -1129,6 +1159,21 @@ unsafe extern "system" fn panel_wnd_proc(
                             PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, crate::ui::tray::IDM_APPLY_UPDATE as _, 0);
                         }
                     }
+                } else if ey >= 812 && ey <= 840 {
+                    if x >= 20 && x <= 220 {
+                        if let Some(state_arc) = &PANEL_STATE {
+                            let mut s = state_arc.lock().unwrap();
+                            s.auto_start = !s.auto_start;
+                        }
+                        if !host.is_null() {
+                            PostMessageW(host, WM_SAVE_AUTOSTART, 0, 0);
+                        }
+                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+                    }
+                } else if ey >= 894 && ey <= 922 {
+                    if x >= 20 && x <= 200 {
+                        open_config_dir();
+                    }
                 } else if y >= height - 48 && y <= height - 14 {
                     if x >= 20 && x <= 180 {
                         if let Some(state_arc) = &PANEL_STATE {
@@ -1185,6 +1230,7 @@ unsafe fn render_settings_view(
     scroll_y: i32,
     hover_btn: i32,
     auto_update: bool,
+    auto_start: bool,
 ) {
     let sy = scroll_y;
     let f_title = create_clear_font((14.0 * font_scale).round() as i32, true);
@@ -1306,6 +1352,27 @@ unsafe fn render_settings_view(
             true, hover_btn == 142, font_scale,
         );
     }
+
+    // 9. 开机自启
+    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
+    let mut startup_title = RECT { left: 20, top: 770 - sy, right: width - 20, bottom: 788 - sy };
+    draw_text_clean(mem_dc, "9. 开机自动启动 (Windows 登录时)", &mut startup_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
+    let mut startup_desc = RECT { left: 20, top: 788 - sy, right: width - 20, bottom: 806 - sy };
+    draw_text_clean(mem_dc, "写入当前用户注册表 Run 项，登录后静默常驻托盘，不弹出主界面：", &mut startup_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    let startup_text = if auto_start { "🚀 开机自启: [已开启]" } else { "⚪ 开机自启: [已关闭]" };
+    render_choice_pill(mem_dc, 20, 812 - sy, 200, 28, startup_text, auto_start, hover_btn == 150, font_scale);
+
+    // 10. 配置文件目录
+    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
+    let mut config_title = RECT { left: 20, top: 852 - sy, right: width - 20, bottom: 870 - sy };
+    draw_text_clean(mem_dc, "10. 配置文件目录", &mut config_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
+    let config_path = crate::config::AppConfig::config_path();
+    let mut config_desc = RECT { left: 20, top: 870 - sy, right: width - 20, bottom: 888 - sy };
+    draw_text_clean(mem_dc, &config_path.display().to_string(), &mut config_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+    render_choice_pill(mem_dc, 20, 894 - sy, 180, 28, "📁 打开配置目录", false, hover_btn == 151, font_scale);
+
     SelectObject(mem_dc, old_f);
     DeleteObject(f_title);
     DeleteObject(f_desc);
