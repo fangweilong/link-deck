@@ -79,7 +79,7 @@ impl DeviceManager {
 
             // Initial detection
             let mut current = Vec::new();
-            if let Some(d) = rk.detect() {
+            for d in rk.detect_all() {
                 push_unique(&mut current, d);
             }
             if let Some(d) = mouse.detect() {
@@ -115,8 +115,9 @@ impl DeviceManager {
             *devices_arc.write().unwrap() = current;
 
             while running.load(Ordering::SeqCst) {
-                // Poll Keyboard
-                let rk_bat = rk.poll_battery();
+                // 有线键盘与接收器可能同时存在，每次都完整枚举后合并，
+                // 避免“插了线仍显示 2.4G”这类状态不更新问题。
+                let rk_snaps = rk.detect_all();
 
                 // Poll Mouse
                 let mouse_bat = mouse.poll_battery();
@@ -132,20 +133,22 @@ impl DeviceManager {
                 let corsair_devices = CorsairDriver::scan_devices();
                 {
                     let mut list = devices_arc.write().unwrap();
-                    let mut found_rk = false;
                     let mut found_mouse = false;
 
+                    // 同步 RK 设备集合：新增接入的、刷新已存在的、移除已拔出的
+                    list.retain(|d| {
+                        !d.id.starts_with("rk_keyboard")
+                            || rk_snaps.iter().any(|n| n.id == d.id)
+                    });
+                    for snap in &rk_snaps {
+                        match list.iter_mut().find(|d| d.id == snap.id) {
+                            Some(existing) => existing.battery = snap.battery.clone(),
+                            None => list.push(snap.clone()),
+                        }
+                    }
+
                     for dev in list.iter_mut() {
-                        if dev.id.contains("rk_keyboard") {
-                            found_rk = true;
-                            if let Some(b) = &rk_bat {
-                                let old_pct = dev.battery.percentage;
-                                dev.battery = b.clone();
-                                if dev.battery.percentage.is_none() && old_pct.is_some() {
-                                    dev.battery.percentage = old_pct;
-                                }
-                            }
-                        } else if dev.id.contains("mouse_") {
+                        if dev.id.contains("mouse_") {
                             found_mouse = true;
                             if let Some(b) = &mouse_bat {
                                 let old_pct = dev.battery.percentage;
@@ -191,12 +194,6 @@ impl DeviceManager {
                         }
                     }
 
-                    // Redetect if missing
-                    if !found_rk {
-                        if let Some(d) = rk.detect() {
-                            list.push(d);
-                        }
-                    }
                     if !found_mouse {
                         if let Some(d) = mouse.detect() {
                             list.push(d);
@@ -356,7 +353,7 @@ impl DeviceManager {
             let mut mouse = SaiggiMouseDriver::new();
             let mut updated = Vec::new();
 
-            if let Some(d) = rk.detect() {
+            for d in rk.detect_all() {
                 push_unique(&mut updated, d);
             }
             if let Some(d) = mouse.detect() {

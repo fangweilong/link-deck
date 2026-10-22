@@ -30,6 +30,84 @@ impl RkKeyboardDriver {
         Self { info: None }
     }
 
+    /// 枚举 RK/Compx 键盘。
+    ///
+    /// 同一把三模键盘在用 USB 线连接时会同时出现「有线集合」和「2.4G 接收器」，
+    /// 但它们是同一台设备：这里合并成一条，并**优先采用有线状态**（充电、供电）。
+    /// 设备 ID 以接收器 PID 为稳定基准（无接收器时用有线 PID），
+    /// 这样插拔 USB 线不会导致列表里多一条或 ID 变化。
+    pub fn detect_all(&mut self) -> Vec<DeviceSnapshot> {
+        let devices = enumerate_hid_devices();
+        let mut out = Vec::new();
+
+        // 有线键盘集合（厂商页 0xFF00/0xFF02，排除接收器 PID）
+        let wired = devices.iter().find(|d| {
+            is_rk_keyboard_vid(d.vendor_id)
+                && (d.usage_page == 0xFF00 || d.usage_page == 0xFF02)
+                && d.product_id != RK_COMPX_PID
+                && d.product_id != 0xFA09
+        });
+        // 2.4G 接收器状态集合
+        let dongle = devices.iter().find(|d| {
+            is_rk_keyboard_vid(d.vendor_id)
+                && d.usage_page == 0xFF02
+                && d.usage == 0x0002
+                && d.feature_len >= 8
+                && d.feature_len < 520
+        });
+
+        let dongle_battery = dongle.map(|d| self.query_battery_internal(d));
+
+        let anchor = wired.cloned().or_else(|| dongle.cloned());
+        let Some(anchor) = anchor else {
+            self.info = None;
+            return out;
+        };
+
+        // 稳定 ID：优先接收器 PID（常驻），其次有线 PID
+        let id_pid = dongle.map(|d| d.product_id).unwrap_or(anchor.product_id);
+        let wired_present = wired.is_some();
+
+        let mut battery = dongle_battery.unwrap_or_default();
+        if wired_present {
+            // 有线优先：插着线就是在供电，电量取接收器回读（若有），否则视为满电
+            battery.charging = true;
+            battery.charging_source = ChargingSource::Charging;
+            battery.online = true;
+            if battery.percentage.is_none() {
+                battery.percentage = Some(100);
+            }
+        } else if battery.online {
+            battery.charging_source = ChargingSource::None;
+        }
+
+        let (vendor_id, product_id, path, connection) = if let Some(w) = wired {
+            (w.vendor_id, w.product_id, w.path.clone(), ConnectionMode::Wired)
+        } else {
+            let d = dongle.unwrap();
+            (d.vendor_id, d.product_id, d.path.clone(), ConnectionMode::Wireless24G)
+        };
+
+        let hw_name = HidDevice::open(anchor, false)
+            .ok()
+            .and_then(|h| h.get_product_string());
+        let model_name = lookup_rk_model(product_id, hw_name.as_deref(), "Compx 方案三模机械键盘");
+
+        out.push(DeviceSnapshot {
+            id: format!("rk_keyboard_{:04x}", id_pid),
+            name: model_name,
+            kind: DeviceKind::Keyboard,
+            vendor_id,
+            product_id,
+            connection,
+            battery,
+            path,
+        });
+
+        self.info = wired.cloned().or_else(|| dongle.cloned());
+        out
+    }
+
     pub fn detect(&mut self) -> Option<DeviceSnapshot> {
         let devices = enumerate_hid_devices();
 
@@ -216,6 +294,7 @@ pub fn lookup_rk_model(pid: u16, hw_name: Option<&str>, default_name: &str) -> S
         0x005E | 0x0064 | 0x006F | 0x0079 | 0x008E | 0x00DA | 0x00FF | 0x010A | 0x02AC => {
             "RK68 三模机械键盘".to_string()
         }
+        0x00A1 => "RK932RGB 机械键盘".to_string(),
         _ => default_name.to_string(),
     }
 }
