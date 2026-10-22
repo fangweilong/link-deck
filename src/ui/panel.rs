@@ -94,6 +94,7 @@ pub struct PanelStateData {
     pub toast_warning: u8,
     pub toast_critical: u8,
     pub toast_gaming_suppression: bool,
+    pub enable_low_battery_sound: bool,
     pub auto_update: bool,
     pub auto_start: bool,
 }
@@ -150,6 +151,7 @@ impl PanelWindow {
                 toast_warning: config.toast_threshold_warning,
                 toast_critical: config.toast_threshold_critical,
                 toast_gaming_suppression: config.toast_gaming_suppression,
+                enable_low_battery_sound: config.enable_low_battery_sound,
                 auto_update: config.check_updates,
                 auto_start: config.auto_start,
             }));
@@ -566,18 +568,19 @@ unsafe extern "system" fn panel_wnd_proc(
 
             SetBkMode(mem_dc, TRANSPARENT as i32);
 
-            let (raw_devices, ball_on, font_scale, poll_ms, hover_btn, active_tab, enable_toast, toast_info, toast_warn, toast_crit, toast_gaming, ui_density, scroll_y, settings_scroll_y, refresh_status, device_filter, device_sort, accent_theme, show_onboarding, selected_device_id, auto_update, auto_start) =
+            let (raw_devices, ball_on, font_scale, poll_ms, hover_btn, active_tab, enable_toast, toast_info, toast_warn, toast_crit, toast_gaming, toast_sound, ui_density, scroll_y, settings_scroll_y, refresh_status, device_filter, device_sort, accent_theme, show_onboarding, selected_device_id, auto_update, auto_start) =
                 if let Some(state_arc) = &PANEL_STATE {
                     let state = state_arc.lock().unwrap();
                     (state.devices.clone(), state.floating_ball_enabled, state.font_scale,
                         state.poll_interval_ms, state.hover_btn, state.active_tab,
                         state.enable_toast, state.toast_info, state.toast_warning,
                         state.toast_critical, state.toast_gaming_suppression,
+                        state.enable_low_battery_sound,
                         state.ui_density, state.scroll_y, state.settings_scroll_y, state.refresh_status.clone(),
                         state.device_filter, state.device_sort, state.accent_theme, state.show_onboarding,
                         state.selected_device_id.clone(), state.auto_update, state.auto_start)
                 } else {
-                    (Vec::new(), false, 1.15, 300_000, 0, 0, true, 50, 30, 10, true,
+                    (Vec::new(), false, 1.15, 300_000, 0, 0, true, 50, 30, 10, true, true,
                         crate::config::UiDensity::Standard, 0, 0, "就绪 · 可立即刷新".to_string(),
                         crate::config::DeviceFilter::All, crate::config::DeviceSort::Priority,
                         crate::config::AccentTheme::Orange, true, None, true, false)
@@ -742,6 +745,7 @@ unsafe extern "system" fn panel_wnd_proc(
                 render_settings_view(
                     mem_dc, width, height, font_scale, poll_ms, ball_on,
                     enable_toast, toast_info, toast_warn, toast_crit, toast_gaming,
+                    toast_sound,
                     ui_density, device_filter, device_sort, accent_theme, settings_scroll_y, hover_btn,
                     auto_update, auto_start,
                 );
@@ -851,11 +855,13 @@ unsafe extern "system" fn panel_wnd_proc(
                 else if content_y >= 356 && content_y <= 388 {
                     if x >= 20 && x <= 180 { new_hover = 60; }
                     else if x >= 190 && x <= 380 { new_hover = 61; }
+                    else if x >= 390 && x <= 600 { new_hover = 62; }
                 } else if content_y >= 392 && content_y <= 424 {
                     if x >= 20 && x <= 125 { new_hover = 70; }
                     else if x >= 135 && x <= 240 { new_hover = 71; }
                     else if x >= 250 && x <= 355 { new_hover = 72; }
                     else if x >= 365 && x <= 505 { new_hover = 80; }
+                    else if x >= 515 && x <= 600 { new_hover = 81; }
                 } else if content_y >= 478 && content_y <= 504 {
                     if x >= 20 && x <= 110 { new_hover = 100; }
                     else if x >= 118 && x <= 208 { new_hover = 101; }
@@ -1057,6 +1063,15 @@ unsafe extern "system" fn panel_wnd_proc(
                             PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
                         }
                         windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+                    } else if x >= 390 && x <= 600 {
+                        if let Some(state_arc) = &PANEL_STATE {
+                            let mut s = state_arc.lock().unwrap();
+                            s.enable_low_battery_sound = !s.enable_low_battery_sound;
+                        }
+                        if !host.is_null() {
+                            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
+                        }
+                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
                     }
                 } else if ey >= 392 && ey <= 424 {
                     if x >= 20 && x <= 125 {
@@ -1105,6 +1120,8 @@ unsafe extern "system" fn panel_wnd_proc(
                             crate::ui::toast::ToastLevel::Warning,
                             28,
                         );
+                    } else if x >= 515 && x <= 600 {
+                        crate::sound::play_low_battery_alarm();
                     }
                 } else if ey >= 474 && ey <= 504 {
                     let density = if x >= 20 && x <= 110 { Some(crate::config::UiDensity::Compact) }
@@ -1223,6 +1240,7 @@ unsafe fn render_settings_view(
     toast_warn: u8,
     toast_crit: u8,
     toast_gaming: bool,
+    toast_sound: bool,
     ui_density: crate::config::UiDensity,
     device_filter: crate::config::DeviceFilter,
     device_sort: crate::config::DeviceSort,
@@ -1277,11 +1295,13 @@ unsafe fn render_settings_view(
     draw_text_clean(mem_dc, "4. 低电量原生 Toast 弹窗通知 (多级预警)", &mut s4_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
     let mut s4_d = RECT { left: 20, top: 338 - sy, right: width - 20, bottom: 356 - sy };
-    draw_text_clean(mem_dc, "外设电量跌破阈值时在屏幕右下角弹出 Toast 提醒；全屏或玩游戏时降级/免打扰：", &mut s4_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    draw_text_clean(mem_dc, "跌破阈值时右下角弹出 Toast；危险阈值同步播放提示音；全屏或游戏时降级/免打扰：", &mut s4_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     let toast_text = if enable_toast { "🔔 电量弹窗: [已开启]" } else { "🔕 电量弹窗: [已关闭]" };
     render_choice_pill(mem_dc, 20,  360 - sy, 160, 26, toast_text, enable_toast, hover_btn == 60, font_scale);
     let game_text = if toast_gaming { "🎮 游戏全屏免打扰: [已开启]" } else { "🎮 游戏全屏免打扰: [已关闭]" };
     render_choice_pill(mem_dc, 190, 360 - sy, 190, 26, game_text, toast_gaming,  hover_btn == 61, font_scale);
+    let sound_text = if toast_sound { "🔊 傻妞饿死了提示音: [已开启]" } else { "🔇 傻妞饿死了提示音: [已关闭]" };
+    render_choice_pill(mem_dc, 390, 360 - sy, 210, 26, sound_text, toast_sound, hover_btn == 62, font_scale);
     let info_str = format!("提示: < {}%", toast_info);
     let warn_str = format!("警告: < {}%", toast_warn);
     let crit_str = format!("危险: < {}%", toast_crit);
@@ -1289,6 +1309,7 @@ unsafe fn render_settings_view(
     render_choice_pill(mem_dc, 135, 396 - sy, 105, 26, &warn_str,          true, hover_btn == 71, font_scale);
     render_choice_pill(mem_dc, 250, 396 - sy, 105, 26, &crit_str,          true, hover_btn == 72, font_scale);
     render_choice_pill(mem_dc, 365, 396 - sy, 140, 26, "🚀 试发一条Toast", false, hover_btn == 80, font_scale);
+    render_choice_pill(mem_dc, 515, 396 - sy, 85, 26,  "🎵 试听",         false, hover_btn == 81, font_scale);
 
     SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
     let mut density_title = RECT { left: 20, top: 438 - sy, right: width - 20, bottom: 456 - sy };

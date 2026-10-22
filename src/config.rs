@@ -89,6 +89,9 @@ pub struct AppConfig {
     /// Suppress topmost during fullscreen / gaming
     #[serde(default = "default_true")]
     pub toast_gaming_suppression: bool,
+    /// Play an audible alarm together with the critical (<= 10%) toast
+    #[serde(default = "default_true")]
+    pub enable_low_battery_sound: bool,
     #[serde(default)]
     pub device_filter: DeviceFilter,
     #[serde(default)]
@@ -141,6 +144,7 @@ impl Default for AppConfig {
             toast_threshold_warning: 30,
             toast_threshold_critical: 10,
             toast_gaming_suppression: true,
+            enable_low_battery_sound: true,
             device_filter: DeviceFilter::All,
             device_sort: DeviceSort::Priority,
             accent_theme: AccentTheme::Orange,

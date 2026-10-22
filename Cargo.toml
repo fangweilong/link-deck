@@ -1,6 +1,6 @@
 [package]
 name = "link-deck"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 
 [dependencies]
@@ -26,6 +26,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Registry",
+    "Win32_Media_Audio",
 ] }
 
 [build-dependencies]

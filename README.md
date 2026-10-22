@@ -88,7 +88,7 @@
 
 ### 自动更新 (单一 exe 自替换)
 - 启动 10 秒后自动检查一次 GitHub Releases，此后每 6 小时轮询；可在 `偏好设置 → 8. 版本与更新` 关闭。
-- 版本比较按语义化版本（`v0.4.1 > v0.4.0`），只有远端更高时才提示，不会重复打扰。
+- 版本比较按语义化版本（`v0.5.0 > v0.4.1`），只有远端更高时才提示，不会重复打扰。
 - 升级流程：WinHTTP 下载 → 校验 `MZ` 头与体积 → 把运行中的 exe 改名为 `*.old.exe` → 复制新文件 → 拉起新进程并等待启动标记后旧进程退出 → 下次启动清理备份。
 - 新进程被拦截、立即崩溃或 5 秒内未就绪会自动回滚到原版本，并写入 `%APPDATA%\LinkDeck\update.log`；任一步失败原 exe 不会丢失；安装在只读目录（如 `Program Files`）时会给出明确提示。
 - 托盘菜单会直接显示「⬆️ 立即升级到 vX.Y.Z」，也可用命令行：
@@ -97,6 +97,11 @@
   link-deck.exe --download-update --force # 强制下载当前最新版（用于修复损坏的安装）
   link-deck.exe --apply-update <path>     # 用指定 exe 替换自身并重启
   ```
+
+### 低电量语音提示 ("饿死了")
+- 电量跌破危险阈值（默认 `< 10%`）时，右下角 Toast 与语音提示**同时触发**；同一档位只响一次，充上电后自动复位，重新跌破会再次提醒。
+- 内置音效为微软 Edge 神经网络女声合成的「饿死了」，以 WAV 内嵌进 exe（`assets/low_battery_esi.wav`），单文件运行无需任何外部资源；`偏好设置 → 4. 低电量通知` 可开关，点 `🎵 试听` 立即试听。
+- 需要重新生成默认音效时执行 `scripts\gen_low_battery_sound.ps1`（依赖 edge-tts 与 ffmpeg），脚本会保留最后一个字的自然收音，不会硬切。
 
 ### Dashboard convenience features
 - Manual refresh displays an immediate in-progress state and a completion summary with total, added, and changed device counts.

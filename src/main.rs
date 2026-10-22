@@ -4,6 +4,7 @@
 mod autostart;
 mod config;
 mod devices;
+mod sound;
 mod ui;
 mod update;
 
@@ -517,10 +518,11 @@ unsafe extern "system" fn host_wnd_proc(
                     let t_info = app.config.toast_threshold_info;
                     let t_warn = app.config.toast_threshold_warning;
                     let t_crit = app.config.toast_threshold_critical;
+                    let sound_on = app.config.enable_low_battery_sound;
 
                     // Multi-threshold battery toast alerts
                     if toast_on {
-                        check_battery_toast_alerts(&snaps, t_info, t_warn, t_crit);
+                        check_battery_toast_alerts(&snaps, t_info, t_warn, t_crit, sound_on);
                     }
 
                     // Update floating ball if enabled
@@ -795,9 +797,9 @@ unsafe extern "system" fn host_wnd_proc(
         }
         crate::ui::panel::WM_SAVE_TOAST_SETTINGS => {
             if let Some(state_arc) = &crate::ui::panel::PANEL_STATE {
-                let (enabled, info, warn, crit, gaming) = {
+                let (enabled, info, warn, crit, gaming, sound) = {
                     let s = state_arc.lock().unwrap();
-                    (s.enable_toast, s.toast_info, s.toast_warning, s.toast_critical, s.toast_gaming_suppression)
+                    (s.enable_toast, s.toast_info, s.toast_warning, s.toast_critical, s.toast_gaming_suppression, s.enable_low_battery_sound)
                 };
                 if let Some(app_arc) = &APP_INSTANCE {
                     let mut app = app_arc.lock().unwrap();
@@ -806,6 +808,10 @@ unsafe extern "system" fn host_wnd_proc(
                     app.config.toast_threshold_warning = warn;
                     app.config.toast_threshold_critical = crit;
                     app.config.toast_gaming_suppression = gaming;
+                    app.config.enable_low_battery_sound = sound;
+                    if !sound {
+                        crate::sound::stop_alarm();
+                    }
                     let _ = app.config.save();
                 }
             }
@@ -905,7 +911,13 @@ struct AlertTracker {
 
 static mut ALERT_TRACKERS: Option<std::collections::HashMap<String, AlertTracker>> = None;
 
-fn check_battery_toast_alerts(snaps: &[devices::types::DeviceSnapshot], t_info: u8, t_warn: u8, t_crit: u8) {
+fn check_battery_toast_alerts(
+    snaps: &[devices::types::DeviceSnapshot],
+    t_info: u8,
+    t_warn: u8,
+    t_crit: u8,
+    sound_on: bool,
+) {
     unsafe {
         if ALERT_TRACKERS.is_none() {
             ALERT_TRACKERS = Some(std::collections::HashMap::new());
@@ -940,6 +952,10 @@ fn check_battery_toast_alerts(snaps: &[devices::types::DeviceSnapshot], t_info: 
                             crate::ui::toast::ToastLevel::Critical,
                             pct,
                         );
+                        // 弹窗同时播放“饿死了”提示音（与弹窗共用同一次触发，绝不重复）
+                        if sound_on {
+                            crate::sound::play_low_battery_alarm();
+                        }
                     }
                 } else if pct <= t_warn {
                     if !tracker.alerted_warn {
