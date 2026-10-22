@@ -27,6 +27,8 @@ pub const IDM_POLL_15M: usize = 1023;
 pub const IDM_POLL_30M: usize = 1024;
 pub const IDM_POLL_60M: usize = 1025;
 pub const IDM_EXIT: usize = 1004;
+pub const IDM_CHECK_UPDATE: usize = 1030;
+pub const IDM_APPLY_UPDATE: usize = 1031;
 
 pub struct TrayIcon {
     hwnd: HWND,
@@ -85,6 +87,24 @@ impl TrayIcon {
             add_item(hmenu, IDM_SHOW_PANEL, "📊 外设控制中心 (主界面)");
             add_item(hmenu, IDM_SHOW_SETTINGS, "⚙️ 偏好设置 (定时间隔/字号/Toast)");
             add_item(hmenu, IDM_REFRESH, "🔄 立即刷新设备状态");
+
+            let update = crate::update::snapshot();
+            let has_update = crate::update::has_update();
+            let update_label = if has_update {
+                format!(
+                    "⬆️ 立即升级到 v{}",
+                    update.latest.clone().unwrap_or_default()
+                )
+            } else if update.checking {
+                "⏳ 正在检查新版本…".to_string()
+            } else {
+                format!("⬆️ 检查更新 (当前 v{})", crate::update::current_version())
+            };
+            add_item(
+                hmenu,
+                if has_update { IDM_APPLY_UPDATE } else { IDM_CHECK_UPDATE },
+                &update_label,
+            );
             AppendMenuW(hmenu, MF_SEPARATOR, 0, ptr::null());
 
             let ball_label = if ball_enabled {

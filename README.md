@@ -86,6 +86,18 @@
    - 点击小球底部的 `⚙️ 打开控制中心` 或托盘菜单即可唤起。
    - 包含多设备卡片、高精度毫伏电压读数、协议类型标注，以及内置 **字体大小切换器（100% 标准 / 115% 适中 / 130% 放大）**。
 
+### 自动更新 (单一 exe 自替换)
+- 启动 10 秒后自动检查一次 GitHub Releases，此后每 6 小时轮询；可在 `偏好设置 → 8. 版本与更新` 关闭。
+- 版本比较按语义化版本（`v0.3.0 > v0.2.1`），只有远端更高时才提示，不会重复打扰。
+- 升级流程：WinHTTP 下载 → 校验 `MZ` 头与体积 → 把运行中的 exe 改名为 `*.old.exe` → 复制新文件 → 拉起新进程并退出 → 下次启动清理备份。
+- 任一步失败自动回滚，原 exe 不会丢失；安装在只读目录（如 `Program Files`）时会给出明确提示。
+- 托盘菜单会直接显示「⬆️ 立即升级到 vX.Y.Z」，也可用命令行：
+  ```powershell
+  link-deck.exe --check-update            # 查询是否有新版本
+  link-deck.exe --download-update --force # 强制下载当前最新版（用于修复损坏的安装）
+  link-deck.exe --apply-update <path>     # 用指定 exe 替换自身并重启
+  ```
+
 ### Dashboard convenience features
 - Manual refresh displays an immediate in-progress state and a completion summary with total, added, and changed device counts.
 - Dashboard preferences support filtering by all, low battery, charging, Bluetooth, or 2.4G devices.

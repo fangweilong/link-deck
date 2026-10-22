@@ -97,6 +97,9 @@ pub struct AppConfig {
     pub accent_theme: AccentTheme,
     #[serde(default = "default_true")]
     pub show_onboarding: bool,
+    /// 启动后自动检查 GitHub Releases 新版本
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
 }
 
 fn default_panel_width() -> i32 {
@@ -139,6 +142,7 @@ impl Default for AppConfig {
             device_sort: DeviceSort::Priority,
             accent_theme: AccentTheme::Orange,
             show_onboarding: true,
+            check_updates: true,
         }
     }
 }

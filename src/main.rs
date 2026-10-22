@@ -4,6 +4,7 @@
 mod config;
 mod devices;
 mod ui;
+mod update;
 
 use config::AppConfig;
 use devices::DeviceManager;
@@ -15,7 +16,8 @@ use ui::panel::PanelWindow;
 use ui::tray::{
     TrayIcon, IDM_EXIT, IDM_FONT_SCALE_100, IDM_FONT_SCALE_115, IDM_FONT_SCALE_130,
     IDM_POLL_1M, IDM_POLL_15M, IDM_POLL_30M, IDM_POLL_30S, IDM_POLL_5M, IDM_POLL_60M,
-    IDM_REFRESH, IDM_SHOW_PANEL, IDM_SHOW_SETTINGS, IDM_TOGGLE_BALL, WM_TRAY_CALLBACK,
+    IDM_APPLY_UPDATE, IDM_CHECK_UPDATE, IDM_REFRESH, IDM_SHOW_PANEL, IDM_SHOW_SETTINGS,
+    IDM_TOGGLE_BALL, WM_TRAY_CALLBACK,
 };
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT, WPARAM,
@@ -35,6 +37,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WNDCLASSEXW,
 };
 pub const WM_LINKDECK_ACTIVATE: u32 = WM_APP + 102;
+/// 更新检查完成（后台线程 → 宿主窗口）
+pub const WM_UPDATE_STATUS: u32 = WM_APP + 103;
 
 struct SingleInstanceGuard(HANDLE);
 
@@ -68,7 +72,62 @@ fn main() {
         }
     }
 
+    // 任何启动方式都先清理上次自更新遗留的备份
+    update::cleanup_old_backup();
+
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--check-update") {
+        unsafe {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+        println!("LinkDeck 更新检查");
+        println!("当前版本: v{}", update::current_version());
+        match update::check_now() {
+            Ok(latest) => {
+                let newer = update::is_newer(&latest, update::current_version());
+                println!("远端最新: v{}", latest);
+                println!("状态: {}", if newer { "发现新版本" } else { "已是最新" });
+                if let Some(url) = update::snapshot().download_url {
+                    println!("下载地址: {}", url);
+                }
+            }
+            Err(e) => println!("检查失败: {}", e),
+        }
+        return;
+    }
+    if args.iter().any(|a| a == "--download-update") || args.iter().any(|a| a == "--apply-update") {
+        unsafe {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+        if args.iter().any(|a| a == "--download-update") {
+            println!("当前版本: v{}", update::current_version());
+            match update::check_now() {
+                Ok(latest) => {
+                    println!("远端最新: v{}", latest);
+                    let force = args.iter().any(|a| a == "--force");
+                    if force || update::is_newer(&latest, update::current_version()) {
+                        match update::download_latest() {
+                            Ok(path) => println!("已下载: {}", path.display()),
+                            Err(e) => println!("下载失败: {}", e),
+                        }
+                    } else {
+                        println!("已是最新版本，无需下载");
+                    }
+                }
+                Err(e) => println!("检查失败: {}", e),
+            }
+        }
+        if let Some(pos) = args.iter().position(|a| a == "--apply-update") {
+            match args.get(pos + 1) {
+                Some(path) => match update::apply_and_restart(std::path::Path::new(path)) {
+                    Ok(()) => {}
+                    Err(e) => println!("升级失败: {}", e),
+                },
+                None => println!("用法: --apply-update <新版本 exe 路径>"),
+            }
+        }
+        return;
+    }
     if args.iter().any(|a| a == "--status" || a == "--scan") {
         unsafe {
             AttachConsole(ATTACH_PARENT_PROCESS);
@@ -196,7 +255,23 @@ fn main() {
 
     // Single-instance check: ensure only one LinkDeck process runs at a time
     let mutex_name: Vec<u16> = "Local\\LinkDeck_SingleInstance_Mutex\0".encode_utf16().collect();
-    let single_instance_mutex = unsafe { CreateMutexW(ptr::null(), 1, mutex_name.as_ptr()) };
+    let mut single_instance_mutex = unsafe { CreateMutexW(ptr::null(), 1, mutex_name.as_ptr()) };
+
+    // 自更新重启：旧进程可能还没退出，先等它释放互斥体，避免新进程自杀
+    if args.iter().any(|a| a == update::AFTER_UPDATE_FLAG)
+        && unsafe { GetLastError() } == ERROR_ALREADY_EXISTS
+    {
+        for _ in 0..40 {
+            unsafe { CloseHandle(single_instance_mutex) };
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            single_instance_mutex = unsafe { CreateMutexW(ptr::null(), 1, mutex_name.as_ptr()) };
+            if unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
+                break;
+            }
+        }
+        // 旧进程此时已退出，锁定解除，可以删掉它的备份文件
+        update::cleanup_old_backup();
+    }
     if !single_instance_mutex.is_null() && unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         // Another instance is already running!
         // Notify the existing instance to display its control panel and bring to foreground.
@@ -304,6 +379,19 @@ fn main() {
         }));
 
         APP_INSTANCE = Some(app_core);
+
+
+        // 后台自动检查新版本（默认开启，可在偏好设置里关闭）
+        {
+            let auto = APP_INSTANCE
+                .as_ref()
+                .map(|app| app.lock().unwrap().config.check_updates)
+                .unwrap_or(true);
+            let host = hwnd as isize;
+            update::spawn_auto_checker(auto, move || {
+                PostMessageW(host as HWND, WM_UPDATE_STATUS, 0, 0);
+            });
+        }
 
         // UI update timer (every 1000ms)
         SetTimer(hwnd, 1, 1000, None);
@@ -443,6 +531,16 @@ unsafe extern "system" fn host_wnd_proc(
                         tip_lines.push("未检测到受支持设备".to_string());
                     }
 
+                    let upd = update::snapshot();
+                    match upd.latest.as_deref() {
+                        Some(latest) if update::is_newer(latest, update::current_version()) => {
+                            tip_lines.push(format!("⬆ 新版本 v{} 可用", latest));
+                        }
+                        _ => {
+                            tip_lines.push(format!("版本 v{}", update::current_version()));
+                        }
+                    }
+
                     let full_tip = tip_lines.join("\n");
                     if let Some(tray) = &mut app.tray {
                         tray.update_tooltip(&full_tip);
@@ -539,6 +637,28 @@ unsafe extern "system" fn host_wnd_proc(
                         }
                     }
                 }
+                IDM_CHECK_UPDATE => {
+                    let host = hwnd as isize;
+                    update::spawn_check(move || {
+                        PostMessageW(host as HWND, WM_UPDATE_STATUS, 0, 0);
+                    });
+                    if let Some(app_arc) = &APP_INSTANCE {
+                        if let Some(panel) = &app_arc.lock().unwrap().panel {
+                            panel.invalidate();
+                        }
+                    }
+                }
+                IDM_APPLY_UPDATE => {
+                    let host = hwnd as isize;
+                    update::spawn_apply(move || {
+                        PostMessageW(host as HWND, WM_UPDATE_STATUS, 0, 0);
+                    });
+                    if let Some(app_arc) = &APP_INSTANCE {
+                        if let Some(panel) = &app_arc.lock().unwrap().panel {
+                            panel.invalidate();
+                        }
+                    }
+                }
                 IDM_EXIT => {
                     PostQuitMessage(0);
                 }
@@ -585,6 +705,26 @@ unsafe extern "system" fn host_wnd_proc(
                     panel.update_devices(&snaps, ball_on, font_scale, poll_ms, app.config.ui_density);
                     panel.show();
                 }
+            }
+            0
+        }
+        WM_UPDATE_STATUS => {
+            if let Some(app_arc) = &APP_INSTANCE {
+                if let Some(panel) = &app_arc.lock().unwrap().panel {
+                    panel.invalidate();
+                }
+            }
+            0
+        }
+        crate::ui::panel::WM_SAVE_UPDATE_PREFS => {
+            let auto = crate::ui::panel::PANEL_STATE
+                .as_ref()
+                .map(|sa| sa.lock().unwrap().auto_update)
+                .unwrap_or(true);
+            if let Some(app_arc) = &APP_INSTANCE {
+                let mut app = app_arc.lock().unwrap();
+                app.config.check_updates = auto;
+                let _ = app.config.save();
             }
             0
         }

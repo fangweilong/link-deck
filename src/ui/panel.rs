@@ -34,7 +34,7 @@ pub const MIN_PANEL_HEIGHT: i32 = 400;
 pub const PANEL_WIDTH: i32 = 640;
 pub const PANEL_HEIGHT: i32 = 680;
 /// Logical height of the settings flow (last pill bottom + bottom padding).
-pub const SETTINGS_CONTENT_HEIGHT: i32 = 700;
+pub const SETTINGS_CONTENT_HEIGHT: i32 = 812;
 
 // Custom messages exchanged with the hidden host window.
 pub const WM_SAVE_PANEL_SIZE: u32 = 0x8000 + 105;
@@ -42,6 +42,7 @@ pub const WM_SAVE_UI_DENSITY: u32 = 0x8000 + 106;
 pub const WM_SAVE_DASHBOARD_PREFS: u32 = 0x8000 + 107;
 pub const WM_SAVE_ONBOARDING: u32 = 0x8000 + 108;
 pub const WM_SAVE_ACCENT_THEME: u32 = 0x8000 + 109;
+pub const WM_SAVE_UPDATE_PREFS: u32 = 0x8000 + 110;
 pub const WM_DEVICE_RENAME: u32 = 0x8000 + 101;
 pub const WM_SAVE_TOAST_SETTINGS: u32 = 0x8000 + 104;
 
@@ -91,6 +92,7 @@ pub struct PanelStateData {
     pub toast_warning: u8,
     pub toast_critical: u8,
     pub toast_gaming_suppression: bool,
+    pub auto_update: bool,
 }
 impl PanelWindow {
     pub fn new(
@@ -145,6 +147,7 @@ impl PanelWindow {
                 toast_warning: config.toast_threshold_warning,
                 toast_critical: config.toast_threshold_critical,
                 toast_gaming_suppression: config.toast_gaming_suppression,
+                auto_update: config.check_updates,
             }));
             PANEL_STATE = Some(state_data);
 
@@ -231,6 +234,13 @@ impl PanelWindow {
                 ShowWindow(self.hwnd, SW_SHOW);
             }
             SetForegroundWindow(self.hwnd);
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(self.hwnd, ptr::null(), 0);
+        }
+    }
+
+    /// 请求重绘（更新状态变化时由宿主调用）
+    pub fn invalidate(&self) {
+        unsafe {
             windows_sys::Win32::Graphics::Gdi::InvalidateRect(self.hwnd, ptr::null(), 0);
         }
     }
@@ -530,7 +540,7 @@ unsafe extern "system" fn panel_wnd_proc(
 
             SetBkMode(mem_dc, TRANSPARENT as i32);
 
-            let (raw_devices, ball_on, font_scale, poll_ms, hover_btn, active_tab, enable_toast, toast_info, toast_warn, toast_crit, toast_gaming, ui_density, scroll_y, settings_scroll_y, refresh_status, device_filter, device_sort, accent_theme, show_onboarding, selected_device_id) =
+            let (raw_devices, ball_on, font_scale, poll_ms, hover_btn, active_tab, enable_toast, toast_info, toast_warn, toast_crit, toast_gaming, ui_density, scroll_y, settings_scroll_y, refresh_status, device_filter, device_sort, accent_theme, show_onboarding, selected_device_id, auto_update) =
                 if let Some(state_arc) = &PANEL_STATE {
                     let state = state_arc.lock().unwrap();
                     (state.devices.clone(), state.floating_ball_enabled, state.font_scale,
@@ -539,12 +549,12 @@ unsafe extern "system" fn panel_wnd_proc(
                         state.toast_critical, state.toast_gaming_suppression,
                         state.ui_density, state.scroll_y, state.settings_scroll_y, state.refresh_status.clone(),
                         state.device_filter, state.device_sort, state.accent_theme, state.show_onboarding,
-                        state.selected_device_id.clone())
+                        state.selected_device_id.clone(), state.auto_update)
                 } else {
                     (Vec::new(), false, 1.15, 300_000, 0, 0, true, 50, 30, 10, true,
                         crate::config::UiDensity::Standard, 0, 0, "就绪 · 可立即刷新".to_string(),
                         crate::config::DeviceFilter::All, crate::config::DeviceSort::Priority,
-                        crate::config::AccentTheme::Orange, true, None)
+                        crate::config::AccentTheme::Orange, true, None, true)
                 };
             let raw_count = raw_devices.len();
             let devices = prepare_devices(raw_devices, device_filter, device_sort);
@@ -707,6 +717,7 @@ unsafe extern "system" fn panel_wnd_proc(
                     mem_dc, width, height, font_scale, poll_ms, ball_on,
                     enable_toast, toast_info, toast_warn, toast_crit, toast_gaming,
                     ui_density, device_filter, device_sort, accent_theme, settings_scroll_y, hover_btn,
+                    auto_update,
                 );
                 SelectClipRgn(mem_dc, ptr::null_mut());
                 DeleteObject(settings_clip);
@@ -835,6 +846,10 @@ unsafe extern "system" fn panel_wnd_proc(
                     else if x >= 118 && x <= 208 { new_hover = 131; }
                     else if x >= 216 && x <= 306 { new_hover = 132; }
                     else if x >= 314 && x <= 404 { new_hover = 133; }
+                } else if content_y >= 728 && content_y <= 754 {
+                    if x >= 20 && x <= 210 { new_hover = 140; }
+                    else if x >= 218 && x <= 314 { new_hover = 141; }
+                    else if x >= 322 && x <= 536 && crate::update::has_update() { new_hover = 142; }
                 } else if y >= height - 48 && y <= height - 14 && x >= 20 && x <= 180 { new_hover = 90; }
             }
 
@@ -1095,6 +1110,25 @@ unsafe extern "system" fn panel_wnd_proc(
                         else if x >= 314 && x <= 404 { Some(crate::config::AccentTheme::Green) }
                         else { None };
                     if let Some(theme) = theme { set_accent_theme(hwnd, host, theme); }
+                } else if ey >= 728 && ey <= 754 {
+                    if x >= 20 && x <= 210 {
+                        if let Some(state_arc) = &PANEL_STATE {
+                            let mut st = state_arc.lock().unwrap();
+                            st.auto_update = !st.auto_update;
+                        }
+                        if !host.is_null() {
+                            PostMessageW(host, WM_SAVE_UPDATE_PREFS, 0, 0);
+                        }
+                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+                    } else if x >= 218 && x <= 314 {
+                        if !host.is_null() {
+                            PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, crate::ui::tray::IDM_CHECK_UPDATE as _, 0);
+                        }
+                    } else if x >= 322 && x <= 536 && crate::update::has_update() {
+                        if !host.is_null() {
+                            PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, crate::ui::tray::IDM_APPLY_UPDATE as _, 0);
+                        }
+                    }
                 } else if y >= height - 48 && y <= height - 14 {
                     if x >= 20 && x <= 180 {
                         if let Some(state_arc) = &PANEL_STATE {
@@ -1108,6 +1142,27 @@ unsafe extern "system" fn panel_wnd_proc(
             0
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+fn update_status_line(state: &crate::update::UpdateState) -> String {
+    let current = crate::update::current_version();
+    if state.applying {
+        return "正在下载并替换程序，完成后会自动重启…".to_string();
+    }
+    if state.checking {
+        return "正在检查 GitHub Releases…".to_string();
+    }
+    if let Some(err) = &state.error {
+        return format!("检查失败: {}（当前 v{}）", err, current);
+    }
+    match state.latest.as_deref() {
+        Some(latest) if crate::update::is_newer(latest, current) => format!(
+            "发现新版本 v{}（当前 v{}）· 点击右侧按钮自动替换并重启",
+            latest, current
+        ),
+        Some(_) => format!("已是最新版本（v{}）", current),
+        None => format!("当前版本 v{} · 可手动检查更新", current),
     }
 }
 
@@ -1129,6 +1184,7 @@ unsafe fn render_settings_view(
     accent_theme: crate::config::AccentTheme,
     scroll_y: i32,
     hover_btn: i32,
+    auto_update: bool,
 ) {
     let sy = scroll_y;
     let f_title = create_clear_font((14.0 * font_scale).round() as i32, true);
@@ -1221,6 +1277,35 @@ unsafe fn render_settings_view(
     render_choice_pill(mem_dc, 118, 640 - sy, 90, 26, "蓝色", matches!(accent_theme, crate::config::AccentTheme::Blue),   hover_btn == 131, font_scale);
     render_choice_pill(mem_dc, 216, 640 - sy, 90, 26, "紫色", matches!(accent_theme, crate::config::AccentTheme::Purple), hover_btn == 132, font_scale);
     render_choice_pill(mem_dc, 314, 640 - sy, 90, 26, "绿色", matches!(accent_theme, crate::config::AccentTheme::Green),  hover_btn == 133, font_scale);
+
+    // 8. 版本与更新
+    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
+    let mut upd_title = RECT { left: 20, top: 686 - sy, right: width - 20, bottom: 704 - sy };
+    draw_text_clean(mem_dc, "8. 版本与更新 (单一 exe 自替换)", &mut upd_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    SelectObject(mem_dc, f_desc);
+    let upd = crate::update::snapshot();
+    SetTextColor(mem_dc, if upd.error.is_some() { CLR_RED } else { CLR_MUTED });
+    let upd_status = update_status_line(&upd);
+    let mut upd_desc = RECT { left: 20, top: 704 - sy, right: width - 20, bottom: 722 - sy };
+    draw_text_clean(mem_dc, &upd_status, &mut upd_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+
+    render_choice_pill(
+        mem_dc, 20, 728 - sy, 190, 26,
+        if auto_update { "自动检查更新: 开" } else { "自动检查更新: 关" },
+        auto_update, hover_btn == 140, font_scale,
+    );
+    render_choice_pill(
+        mem_dc, 218, 728 - sy, 96, 26,
+        if upd.checking { "检查中…" } else { "检查更新" },
+        false, hover_btn == 141, font_scale,
+    );
+    if let Some(latest) = upd.latest.as_deref().filter(|v| crate::update::is_newer(v, crate::update::current_version())) {
+        render_choice_pill(
+            mem_dc, 322, 728 - sy, 214, 26,
+            &format!("立即升级到 v{}", latest),
+            true, hover_btn == 142, font_scale,
+        );
+    }
     SelectObject(mem_dc, old_f);
     DeleteObject(f_title);
     DeleteObject(f_desc);
