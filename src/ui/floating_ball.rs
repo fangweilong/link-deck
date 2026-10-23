@@ -38,10 +38,17 @@ pub const EXPANDED_HEIGHT: i32 = 205;
 const CLR_COLORKEY: COLORREF = 0x00FF00FF; // Magenta colorkey for transparent edges
 const TIMER_BALL_ANIM: usize = 1001;
 
-// Uniform opacity for the docked gauge and the expanded drawer (0-255).
-// The ball is deliberately translucent so it reads as an overlay, not a block.
-const ALPHA_DOCKED: u8 = 208;
-const ALPHA_EXPANDED: u8 = 238;
+// The expanded drawer never drops below this alpha: its text has to stay readable
+// even when the user dials the docked gauge far down.
+const ALPHA_DRAWER_FLOOR: u8 = 232;
+
+fn layered_alpha(expanded: bool, opacity: u8) -> u8 {
+    if expanded {
+        opacity.max(ALPHA_DRAWER_FLOOR)
+    } else {
+        opacity
+    }
+}
 
 pub fn get_expanded_width(font_scale: f32) -> i32 {
     if font_scale >= 1.25 {
@@ -85,6 +92,8 @@ pub struct BallStateData {
     pub cur_y: i32,
     pub hover: bool,
     pub hover_btn: i32,
+    /// Layered-window alpha (0-255) chosen by the user for the docked gauge.
+    pub opacity: u8,
     pub host_hwnd: HWND,
     pub hwnd: HWND,
     pub tooltip_hwnd: HWND,
@@ -98,6 +107,7 @@ impl FloatingBallWindow {
         host_hwnd: HWND,
         initial_enabled: bool,
         font_scale: f32,
+        opacity: u8,
     ) -> Result<Self, String> {
         unsafe {
             let instance = GetModuleHandleW(ptr::null());
@@ -133,6 +143,7 @@ impl FloatingBallWindow {
                 cur_y: start_y,
                 hover: false,
                 hover_btn: 0,
+                opacity,
                 host_hwnd,
                 hwnd: ptr::null_mut(),
                 tooltip_hwnd: ptr::null_mut(),
@@ -161,7 +172,7 @@ impl FloatingBallWindow {
                 return Err("Failed to create floating ball window".into());
             }
 
-            set_ball_alpha(hwnd, ALPHA_DOCKED);
+            set_ball_alpha(hwnd, layered_alpha(false, opacity));
 
             // Create Tooltip
             let tooltip_hwnd = CreateWindowExW(
@@ -245,6 +256,17 @@ impl FloatingBallWindow {
         }
     }
 
+    /// Applies a user-chosen docked opacity. The drawer keeps its readable floor.
+    pub fn set_opacity(&self, opacity: u8) {
+        unsafe {
+            if let Some(state_arc) = &BALL_STATE {
+                let mut state = state_arc.lock().unwrap();
+                state.opacity = opacity;
+                set_ball_alpha(self.hwnd, layered_alpha(state.expanded, opacity));
+            }
+        }
+    }
+
     pub fn set_enabled(&self, enabled: bool) {
         unsafe {
             let screen_w = GetSystemMetrics(SM_CXSCREEN);
@@ -264,7 +286,7 @@ impl FloatingBallWindow {
                         DOCK_H,
                         SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     );
-                    set_ball_alpha(self.hwnd, ALPHA_DOCKED);
+                    set_ball_alpha(self.hwnd, layered_alpha(false, state.opacity));
                     SetTimer(self.hwnd, TIMER_BALL_ANIM, 100, None);
                     ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
                 } else {
@@ -636,7 +658,7 @@ unsafe extern "system" fn ball_wnd_proc(
                         new_h,
                         SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     );
-                    set_ball_alpha(hwnd, if is_exp { ALPHA_EXPANDED } else { ALPHA_DOCKED });
+                    set_ball_alpha(hwnd, layered_alpha(is_exp, state.opacity));
                 }
                 windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
             }

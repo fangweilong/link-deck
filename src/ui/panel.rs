@@ -45,6 +45,8 @@ pub const WM_SAVE_ONBOARDING: u32 = 0x8000 + 108;
 pub const WM_SAVE_ACCENT_THEME: u32 = 0x8000 + 109;
 pub const WM_SAVE_UPDATE_PREFS: u32 = 0x8000 + 110;
 pub const WM_SAVE_AUTOSTART: u32 = 0x8000 + 111;
+/// wParam carries the docked ball opacity in percent (40-100).
+pub const WM_SET_BALL_OPACITY: u32 = 0x8000 + 112;
 pub const WM_DEVICE_RENAME: u32 = 0x8000 + 101;
 pub const WM_SAVE_TOAST_SETTINGS: u32 = 0x8000 + 104;
 
@@ -77,6 +79,7 @@ pub struct PanelStateData {
     pub floating_ball_enabled: bool,
     pub font_scale: f32,
     pub poll_interval_ms: u64,
+    pub ball_opacity: u8,
     pub ui_density: crate::config::UiDensity,
     pub scroll_y: i32,
     pub settings_scroll_y: i32,
@@ -134,6 +137,7 @@ impl PanelWindow {
                 floating_ball_enabled: config.enable_floating_ball,
                 font_scale: config.font_scale,
                 poll_interval_ms: config.poll_interval_ms,
+                ball_opacity: config.floating_ball_opacity,
                 ui_density: config.ui_density,
                 scroll_y: 0,
                 settings_scroll_y: 0,
@@ -191,6 +195,7 @@ impl PanelWindow {
         &self,
         devices: &[DeviceSnapshot],
         ball_enabled: bool,
+        ball_opacity: u8,
         font_scale: f32,
         poll_interval_ms: u64,
         ui_density: crate::config::UiDensity,
@@ -202,6 +207,7 @@ impl PanelWindow {
                 state.floating_ball_enabled = ball_enabled;
                 state.font_scale = font_scale;
                 state.poll_interval_ms = poll_interval_ms;
+                state.ball_opacity = ball_opacity;
                 state.next_refresh_seconds = poll_interval_ms / 1000;
                 state.ui_density = ui_density;
                 let filtered_count = prepare_devices(state.devices.clone(), state.device_filter, state.device_sort).len();
@@ -334,6 +340,17 @@ unsafe fn set_panel_density(hwnd: HWND, host: HWND, density: crate::config::UiDe
     }
     if !host.is_null() {
         PostMessageW(host, WM_SAVE_UI_DENSITY, density as WPARAM, 0);
+    }
+    windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+}
+
+unsafe fn set_ball_opacity(hwnd: HWND, host: HWND, percent: u8) {
+    if let Some(state_arc) = &PANEL_STATE {
+        let mut state = state_arc.lock().unwrap();
+        state.ball_opacity = percent;
+    }
+    if !host.is_null() {
+        PostMessageW(host, WM_SET_BALL_OPACITY, percent as WPARAM, 0);
     }
     windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
 }
@@ -568,10 +585,10 @@ unsafe extern "system" fn panel_wnd_proc(
 
             SetBkMode(mem_dc, TRANSPARENT as i32);
 
-            let (raw_devices, ball_on, font_scale, poll_ms, hover_btn, active_tab, enable_toast, toast_info, toast_warn, toast_crit, toast_gaming, toast_sound, ui_density, scroll_y, settings_scroll_y, refresh_status, device_filter, device_sort, accent_theme, show_onboarding, selected_device_id, auto_update, auto_start) =
+            let (raw_devices, ball_on, ball_opacity, font_scale, poll_ms, hover_btn, active_tab, enable_toast, toast_info, toast_warn, toast_crit, toast_gaming, toast_sound, ui_density, scroll_y, settings_scroll_y, refresh_status, device_filter, device_sort, accent_theme, show_onboarding, selected_device_id, auto_update, auto_start) =
                 if let Some(state_arc) = &PANEL_STATE {
                     let state = state_arc.lock().unwrap();
-                    (state.devices.clone(), state.floating_ball_enabled, state.font_scale,
+                    (state.devices.clone(), state.floating_ball_enabled, state.ball_opacity, state.font_scale,
                         state.poll_interval_ms, state.hover_btn, state.active_tab,
                         state.enable_toast, state.toast_info, state.toast_warning,
                         state.toast_critical, state.toast_gaming_suppression,
@@ -580,7 +597,7 @@ unsafe extern "system" fn panel_wnd_proc(
                         state.device_filter, state.device_sort, state.accent_theme, state.show_onboarding,
                         state.selected_device_id.clone(), state.auto_update, state.auto_start)
                 } else {
-                    (Vec::new(), false, 1.15, 300_000, 0, 0, true, 50, 30, 10, true, true,
+                    (Vec::new(), false, 80, 1.15, 300_000, 0, 0, true, 50, 30, 10, true, true,
                         crate::config::UiDensity::Standard, 0, 0, "就绪 · 可立即刷新".to_string(),
                         crate::config::DeviceFilter::All, crate::config::DeviceSort::Priority,
                         crate::config::AccentTheme::Orange, true, None, true, false)
@@ -743,7 +760,7 @@ unsafe extern "system" fn panel_wnd_proc(
                 let settings_clip = CreateRectRgn(0, 66, width, (height - 62).max(67));
                 SelectClipRgn(mem_dc, settings_clip);
                 render_settings_view(
-                    mem_dc, width, height, font_scale, poll_ms, ball_on,
+                    mem_dc, width, height, font_scale, poll_ms, ball_on, ball_opacity,
                     enable_toast, toast_info, toast_warn, toast_crit, toast_gaming,
                     toast_sound,
                     ui_density, device_filter, device_sort, accent_theme, settings_scroll_y, hover_btn,
@@ -1044,7 +1061,17 @@ unsafe extern "system" fn panel_wnd_proc(
                     if x >= 20 && x <= 200 && !host.is_null() {
                         PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, crate::ui::tray::IDM_TOGGLE_BALL as _, 0);
                     }
-                } else if ey >= 356 && ey <= 388 {
+                } else if ey >= 328 && ey <= 362 {
+                    let pct = if x >= 20 && x <= 90 { Some(100u8) }
+                        else if x >= 96 && x <= 166 { Some(90) }
+                        else if x >= 172 && x <= 242 { Some(80) }
+                        else if x >= 248 && x <= 318 { Some(70) }
+                        else if x >= 324 && x <= 394 { Some(60) }
+                        else { None };
+                    if let Some(pct) = pct {
+                        set_ball_opacity(hwnd, host, pct);
+                    }
+                } else if ey >= 404 && ey <= 436 {
                     if x >= 20 && x <= 180 {
                         if let Some(state_arc) = &PANEL_STATE {
                             let mut s = state_arc.lock().unwrap();
@@ -1073,7 +1100,7 @@ unsafe extern "system" fn panel_wnd_proc(
                         }
                         windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
                     }
-                } else if ey >= 392 && ey <= 424 {
+                } else if ey >= 440 && ey <= 472 {
                     if x >= 20 && x <= 125 {
                         if let Some(state_arc) = &PANEL_STATE {
                             let mut s = state_arc.lock().unwrap();
@@ -1123,13 +1150,13 @@ unsafe extern "system" fn panel_wnd_proc(
                     } else if x >= 515 && x <= 600 {
                         crate::sound::play_low_battery_alarm();
                     }
-                } else if ey >= 474 && ey <= 504 {
+                } else if ey >= 522 && ey <= 552 {
                     let density = if x >= 20 && x <= 110 { Some(crate::config::UiDensity::Compact) }
                         else if x >= 118 && x <= 208 { Some(crate::config::UiDensity::Standard) }
                         else if x >= 216 && x <= 306 { Some(crate::config::UiDensity::Spacious) }
                         else { None };
                     if let Some(density) = density { set_panel_density(hwnd, host, density); }
-                } else if ey >= 546 && ey <= 576 {
+                } else if ey >= 594 && ey <= 624 {
                     let filter = if x >= 20 && x <= 92 { Some(crate::config::DeviceFilter::All) }
                         else if x >= 98 && x <= 182 { Some(crate::config::DeviceFilter::LowBattery) }
                         else if x >= 188 && x <= 272 { Some(crate::config::DeviceFilter::Charging) }
@@ -1140,7 +1167,7 @@ unsafe extern "system" fn panel_wnd_proc(
                         let sort = PANEL_STATE.as_ref().and_then(|state| state.lock().ok().map(|s| s.device_sort)).unwrap_or(crate::config::DeviceSort::Priority);
                         set_dashboard_preferences(hwnd, host, filter, sort);
                     }
-                } else if ey >= 582 && ey <= 612 {
+                } else if ey >= 630 && ey <= 660 {
                     let sort = if x >= 20 && x <= 102 { Some(crate::config::DeviceSort::Priority) }
                         else if x >= 110 && x <= 192 { Some(crate::config::DeviceSort::Name) }
                         else if x >= 200 && x <= 282 { Some(crate::config::DeviceSort::Battery) }
@@ -1150,14 +1177,14 @@ unsafe extern "system" fn panel_wnd_proc(
                         let filter = PANEL_STATE.as_ref().and_then(|state| state.lock().ok().map(|s| s.device_filter)).unwrap_or(crate::config::DeviceFilter::All);
                         set_dashboard_preferences(hwnd, host, filter, sort);
                     }
-                } else if ey >= 636 && ey <= 666 {
+                } else if ey >= 684 && ey <= 714 {
                     let theme = if x >= 20 && x <= 110 { Some(crate::config::AccentTheme::Orange) }
                         else if x >= 118 && x <= 208 { Some(crate::config::AccentTheme::Blue) }
                         else if x >= 216 && x <= 306 { Some(crate::config::AccentTheme::Purple) }
                         else if x >= 314 && x <= 404 { Some(crate::config::AccentTheme::Green) }
                         else { None };
                     if let Some(theme) = theme { set_accent_theme(hwnd, host, theme); }
-                } else if ey >= 728 && ey <= 754 {
+                } else if ey >= 776 && ey <= 802 {
                     if x >= 20 && x <= 210 {
                         if let Some(state_arc) = &PANEL_STATE {
                             let mut st = state_arc.lock().unwrap();
@@ -1176,7 +1203,7 @@ unsafe extern "system" fn panel_wnd_proc(
                             PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, crate::ui::tray::IDM_APPLY_UPDATE as _, 0);
                         }
                     }
-                } else if ey >= 812 && ey <= 840 {
+                } else if ey >= 860 && ey <= 888 {
                     if x >= 20 && x <= 220 {
                         if let Some(state_arc) = &PANEL_STATE {
                             let mut s = state_arc.lock().unwrap();
@@ -1187,7 +1214,7 @@ unsafe extern "system" fn panel_wnd_proc(
                         }
                         windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
                     }
-                } else if ey >= 894 && ey <= 922 {
+                } else if ey >= 942 && ey <= 970 {
                     if x >= 20 && x <= 200 {
                         open_config_dir();
                     }
@@ -1235,6 +1262,7 @@ unsafe fn render_settings_view(
     font_scale: f32,
     poll_ms: u64,
     ball_on: bool,
+    ball_opacity: u8,
     enable_toast: bool,
     toast_info: u8,
     toast_warn: u8,
@@ -1286,89 +1314,104 @@ unsafe fn render_settings_view(
     draw_text_clean(mem_dc, "3. 桌面贴边悬浮球", &mut s3_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
     let mut s3_d = RECT { left: 20, top: 256 - sy, right: width - 20, bottom: 274 - sy };
-    draw_text_clean(mem_dc, "吸附于屏幕边缘的微型动态能量环胶囊，滚轮切台，悬停滑出抽屉：", &mut s3_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    draw_text_clean(mem_dc, "吸附于屏幕边缘的半环能量仪表，悬停还原完整圆球，点击展开抽屉：", &mut s3_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     let ball_text = if ball_on { "🔘 贴边悬浮球: [已开启]" } else { "⚪ 贴边悬浮球: [已关闭]" };
     render_choice_pill(mem_dc, 20, 278 - sy, 180, 28, ball_text, ball_on, hover_btn == 50, font_scale);
 
+    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
+    let mut s3_o = RECT { left: 20, top: 310 - sy, right: width - 20, bottom: 328 - sy };
+    draw_text_clean(
+        mem_dc,
+        &format!("悬浮球不透明度 (越低越通透，抽屉保持可读)：当前 {}%", ball_opacity),
+        &mut s3_o,
+        DT_LEFT | DT_SINGLELINE | DT_VCENTER,
+    );
+    for (i, pct) in [100u8, 90, 80, 70, 60].iter().enumerate() {
+        render_choice_pill(
+            mem_dc, 20 + (i as i32) * 76, 332 - sy, 70, 26,
+            &format!("{}%", pct), ball_opacity == *pct, hover_btn == 51 + i as i32, font_scale,
+        );
+    }
+
     SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut s4_t = RECT { left: 20, top: 318 - sy, right: width - 20, bottom: 338 - sy };
+    let mut s4_t = RECT { left: 20, top: 366 - sy, right: width - 20, bottom: 386 - sy };
     draw_text_clean(mem_dc, "4. 低电量原生 Toast 弹窗通知 (多级预警)", &mut s4_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
-    let mut s4_d = RECT { left: 20, top: 338 - sy, right: width - 20, bottom: 356 - sy };
+    let mut s4_d = RECT { left: 20, top: 386 - sy, right: width - 20, bottom: 404 - sy };
     draw_text_clean(mem_dc, "跌破阈值时右下角弹出 Toast；危险阈值同步播放提示音；全屏或游戏时降级/免打扰：", &mut s4_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     let toast_text = if enable_toast { "🔔 电量弹窗: [已开启]" } else { "🔕 电量弹窗: [已关闭]" };
-    render_choice_pill(mem_dc, 20,  360 - sy, 160, 26, toast_text, enable_toast, hover_btn == 60, font_scale);
+    render_choice_pill(mem_dc, 20,  408 - sy, 160, 26, toast_text, enable_toast, hover_btn == 60, font_scale);
     let game_text = if toast_gaming { "🎮 游戏全屏免打扰: [已开启]" } else { "🎮 游戏全屏免打扰: [已关闭]" };
-    render_choice_pill(mem_dc, 190, 360 - sy, 190, 26, game_text, toast_gaming,  hover_btn == 61, font_scale);
+    render_choice_pill(mem_dc, 190, 408 - sy, 190, 26, game_text, toast_gaming,  hover_btn == 61, font_scale);
     let sound_text = if toast_sound { "🔊 傻妞饿死了提示音: [已开启]" } else { "🔇 傻妞饿死了提示音: [已关闭]" };
-    render_choice_pill(mem_dc, 390, 360 - sy, 210, 26, sound_text, toast_sound, hover_btn == 62, font_scale);
+    render_choice_pill(mem_dc, 390, 408 - sy, 210, 26, sound_text, toast_sound, hover_btn == 62, font_scale);
     let info_str = format!("提示: < {}%", toast_info);
     let warn_str = format!("警告: < {}%", toast_warn);
     let crit_str = format!("危险: < {}%", toast_crit);
-    render_choice_pill(mem_dc, 20,  396 - sy, 105, 26, &info_str,          true, hover_btn == 70, font_scale);
-    render_choice_pill(mem_dc, 135, 396 - sy, 105, 26, &warn_str,          true, hover_btn == 71, font_scale);
-    render_choice_pill(mem_dc, 250, 396 - sy, 105, 26, &crit_str,          true, hover_btn == 72, font_scale);
-    render_choice_pill(mem_dc, 365, 396 - sy, 140, 26, "🚀 试发一条Toast", false, hover_btn == 80, font_scale);
-    render_choice_pill(mem_dc, 515, 396 - sy, 85, 26,  "🎵 试听",         false, hover_btn == 81, font_scale);
+    render_choice_pill(mem_dc, 20,  444 - sy, 105, 26, &info_str,          true, hover_btn == 70, font_scale);
+    render_choice_pill(mem_dc, 135, 444 - sy, 105, 26, &warn_str,          true, hover_btn == 71, font_scale);
+    render_choice_pill(mem_dc, 250, 444 - sy, 105, 26, &crit_str,          true, hover_btn == 72, font_scale);
+    render_choice_pill(mem_dc, 365, 444 - sy, 140, 26, "🚀 试发一条Toast", false, hover_btn == 80, font_scale);
+    render_choice_pill(mem_dc, 515, 444 - sy, 85, 26,  "🎵 试听",         false, hover_btn == 81, font_scale);
 
     SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut density_title = RECT { left: 20, top: 438 - sy, right: width - 20, bottom: 456 - sy };
+    let mut density_title = RECT { left: 20, top: 486 - sy, right: width - 20, bottom: 504 - sy };
     draw_text_clean(mem_dc, "5. 卡片布局密度", &mut density_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
-    let mut density_desc = RECT { left: 20, top: 456 - sy, right: width - 20, bottom: 474 - sy };
+    let mut density_desc = RECT { left: 20, top: 504 - sy, right: width - 20, bottom: 522 - sy };
     draw_text_clean(mem_dc, "紧凑适合小窗口；宽松提供更舒适的信息间距。", &mut density_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    render_choice_pill(mem_dc, 20,  478 - sy, 90, 26, "紧凑布局", matches!(ui_density, crate::config::UiDensity::Compact),  hover_btn == 100, font_scale);
-    render_choice_pill(mem_dc, 118, 478 - sy, 90, 26, "标准布局", matches!(ui_density, crate::config::UiDensity::Standard), hover_btn == 101, font_scale);
-    render_choice_pill(mem_dc, 216, 478 - sy, 90, 26, "宽松布局", matches!(ui_density, crate::config::UiDensity::Spacious), hover_btn == 102, font_scale);
+    render_choice_pill(mem_dc, 20,  526 - sy, 90, 26, "紧凑布局", matches!(ui_density, crate::config::UiDensity::Compact),  hover_btn == 100, font_scale);
+    render_choice_pill(mem_dc, 118, 526 - sy, 90, 26, "标准布局", matches!(ui_density, crate::config::UiDensity::Standard), hover_btn == 101, font_scale);
+    render_choice_pill(mem_dc, 216, 526 - sy, 90, 26, "宽松布局", matches!(ui_density, crate::config::UiDensity::Spacious), hover_btn == 102, font_scale);
 
     SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut dashboard_title = RECT { left: 20, top: 510 - sy, right: width - 20, bottom: 528 - sy };
+    let mut dashboard_title = RECT { left: 20, top: 558 - sy, right: width - 20, bottom: 576 - sy };
     draw_text_clean(mem_dc, "6. 设备列表", &mut dashboard_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
-    let mut dashboard_desc = RECT { left: 20, top: 528 - sy, right: width - 20, bottom: 546 - sy };
+    let mut dashboard_desc = RECT { left: 20, top: 576 - sy, right: width - 20, bottom: 594 - sy };
     draw_text_clean(mem_dc, "筛选和排序仅影响显示顺序，不会改变后台扫描。", &mut dashboard_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    render_choice_pill(mem_dc, 20,  550 - sy, 72, 26, "全部",   matches!(device_filter, crate::config::DeviceFilter::All),        hover_btn == 120, font_scale);
-    render_choice_pill(mem_dc, 98,  550 - sy, 84, 26, "低电量", matches!(device_filter, crate::config::DeviceFilter::LowBattery), hover_btn == 121, font_scale);
-    render_choice_pill(mem_dc, 188, 550 - sy, 84, 26, "充电中", matches!(device_filter, crate::config::DeviceFilter::Charging),   hover_btn == 122, font_scale);
-    render_choice_pill(mem_dc, 278, 550 - sy, 72, 26, "蓝牙",   matches!(device_filter, crate::config::DeviceFilter::Bluetooth),  hover_btn == 123, font_scale);
-    render_choice_pill(mem_dc, 356, 550 - sy, 72, 26, "2.4G",   matches!(device_filter, crate::config::DeviceFilter::Wireless),   hover_btn == 124, font_scale);
-    render_choice_pill(mem_dc, 20,  586 - sy, 82, 26, "优先级", matches!(device_sort, crate::config::DeviceSort::Priority),       hover_btn == 125, font_scale);
-    render_choice_pill(mem_dc, 110, 586 - sy, 82, 26, "名称",   matches!(device_sort, crate::config::DeviceSort::Name),           hover_btn == 126, font_scale);
-    render_choice_pill(mem_dc, 200, 586 - sy, 82, 26, "电量",   matches!(device_sort, crate::config::DeviceSort::Battery),        hover_btn == 127, font_scale);
-    render_choice_pill(mem_dc, 290, 586 - sy, 82, 26, "更新时间", matches!(device_sort, crate::config::DeviceSort::Updated),      hover_btn == 128, font_scale);
+    render_choice_pill(mem_dc, 20,  598 - sy, 72, 26, "全部",   matches!(device_filter, crate::config::DeviceFilter::All),        hover_btn == 120, font_scale);
+    render_choice_pill(mem_dc, 98,  598 - sy, 84, 26, "低电量", matches!(device_filter, crate::config::DeviceFilter::LowBattery), hover_btn == 121, font_scale);
+    render_choice_pill(mem_dc, 188, 598 - sy, 84, 26, "充电中", matches!(device_filter, crate::config::DeviceFilter::Charging),   hover_btn == 122, font_scale);
+    render_choice_pill(mem_dc, 278, 598 - sy, 72, 26, "蓝牙",   matches!(device_filter, crate::config::DeviceFilter::Bluetooth),  hover_btn == 123, font_scale);
+    render_choice_pill(mem_dc, 356, 598 - sy, 72, 26, "2.4G",   matches!(device_filter, crate::config::DeviceFilter::Wireless),   hover_btn == 124, font_scale);
+    render_choice_pill(mem_dc, 20,  634 - sy, 82, 26, "优先级", matches!(device_sort, crate::config::DeviceSort::Priority),       hover_btn == 125, font_scale);
+    render_choice_pill(mem_dc, 110, 634 - sy, 82, 26, "名称",   matches!(device_sort, crate::config::DeviceSort::Name),           hover_btn == 126, font_scale);
+    render_choice_pill(mem_dc, 200, 634 - sy, 82, 26, "电量",   matches!(device_sort, crate::config::DeviceSort::Battery),        hover_btn == 127, font_scale);
+    render_choice_pill(mem_dc, 290, 634 - sy, 82, 26, "更新时间", matches!(device_sort, crate::config::DeviceSort::Updated),      hover_btn == 128, font_scale);
 
     SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut theme_title = RECT { left: 20, top: 618 - sy, right: width - 20, bottom: 636 - sy };
+    let mut theme_title = RECT { left: 20, top: 666 - sy, right: width - 20, bottom: 684 - sy };
     draw_text_clean(mem_dc, "7. 主题强调色", &mut theme_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    render_choice_pill(mem_dc, 20,  640 - sy, 90, 26, "橙色", matches!(accent_theme, crate::config::AccentTheme::Orange), hover_btn == 130, font_scale);
-    render_choice_pill(mem_dc, 118, 640 - sy, 90, 26, "蓝色", matches!(accent_theme, crate::config::AccentTheme::Blue),   hover_btn == 131, font_scale);
-    render_choice_pill(mem_dc, 216, 640 - sy, 90, 26, "紫色", matches!(accent_theme, crate::config::AccentTheme::Purple), hover_btn == 132, font_scale);
-    render_choice_pill(mem_dc, 314, 640 - sy, 90, 26, "绿色", matches!(accent_theme, crate::config::AccentTheme::Green),  hover_btn == 133, font_scale);
+    render_choice_pill(mem_dc, 20,  688 - sy, 90, 26, "橙色", matches!(accent_theme, crate::config::AccentTheme::Orange), hover_btn == 130, font_scale);
+    render_choice_pill(mem_dc, 118, 688 - sy, 90, 26, "蓝色", matches!(accent_theme, crate::config::AccentTheme::Blue),   hover_btn == 131, font_scale);
+    render_choice_pill(mem_dc, 216, 688 - sy, 90, 26, "紫色", matches!(accent_theme, crate::config::AccentTheme::Purple), hover_btn == 132, font_scale);
+    render_choice_pill(mem_dc, 314, 688 - sy, 90, 26, "绿色", matches!(accent_theme, crate::config::AccentTheme::Green),  hover_btn == 133, font_scale);
 
     // 8. 版本与更新
     SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut upd_title = RECT { left: 20, top: 686 - sy, right: width - 20, bottom: 704 - sy };
+    let mut upd_title = RECT { left: 20, top: 734 - sy, right: width - 20, bottom: 752 - sy };
     draw_text_clean(mem_dc, "8. 版本与更新 (单一 exe 自替换)", &mut upd_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     SelectObject(mem_dc, f_desc);
     let upd = crate::update::snapshot();
     SetTextColor(mem_dc, if upd.error.is_some() { CLR_RED } else { CLR_MUTED });
     let upd_status = update_status_line(&upd);
-    let mut upd_desc = RECT { left: 20, top: 704 - sy, right: width - 20, bottom: 722 - sy };
+    let mut upd_desc = RECT { left: 20, top: 752 - sy, right: width - 20, bottom: 770 - sy };
     draw_text_clean(mem_dc, &upd_status, &mut upd_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
 
     render_choice_pill(
-        mem_dc, 20, 728 - sy, 190, 26,
+        mem_dc, 20, 776 - sy, 190, 26,
         if auto_update { "自动检查更新: 开" } else { "自动检查更新: 关" },
         auto_update, hover_btn == 140, font_scale,
     );
     render_choice_pill(
-        mem_dc, 218, 728 - sy, 96, 26,
+        mem_dc, 218, 776 - sy, 96, 26,
         if upd.checking { "检查中…" } else { "检查更新" },
         false, hover_btn == 141, font_scale,
     );
     if let Some(latest) = upd.latest.as_deref().filter(|v| crate::update::is_newer(v, crate::update::current_version())) {
         render_choice_pill(
-            mem_dc, 322, 728 - sy, 214, 26,
+            mem_dc, 322, 776 - sy, 214, 26,
             &format!("立即升级到 v{}", latest),
             true, hover_btn == 142, font_scale,
         );
@@ -1376,23 +1419,23 @@ unsafe fn render_settings_view(
 
     // 9. 开机自启
     SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut startup_title = RECT { left: 20, top: 770 - sy, right: width - 20, bottom: 788 - sy };
+    let mut startup_title = RECT { left: 20, top: 818 - sy, right: width - 20, bottom: 836 - sy };
     draw_text_clean(mem_dc, "9. 开机自动启动 (Windows 登录时)", &mut startup_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
-    let mut startup_desc = RECT { left: 20, top: 788 - sy, right: width - 20, bottom: 806 - sy };
+    let mut startup_desc = RECT { left: 20, top: 836 - sy, right: width - 20, bottom: 854 - sy };
     draw_text_clean(mem_dc, "写入当前用户注册表 Run 项，登录后静默常驻托盘，不弹出主界面：", &mut startup_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     let startup_text = if auto_start { "🚀 开机自启: [已开启]" } else { "⚪ 开机自启: [已关闭]" };
-    render_choice_pill(mem_dc, 20, 812 - sy, 200, 28, startup_text, auto_start, hover_btn == 150, font_scale);
+    render_choice_pill(mem_dc, 20, 860 - sy, 200, 28, startup_text, auto_start, hover_btn == 150, font_scale);
 
     // 10. 配置文件目录
     SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut config_title = RECT { left: 20, top: 852 - sy, right: width - 20, bottom: 870 - sy };
+    let mut config_title = RECT { left: 20, top: 900 - sy, right: width - 20, bottom: 918 - sy };
     draw_text_clean(mem_dc, "10. 配置文件目录", &mut config_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
     let config_path = crate::config::AppConfig::config_path();
-    let mut config_desc = RECT { left: 20, top: 870 - sy, right: width - 20, bottom: 888 - sy };
+    let mut config_desc = RECT { left: 20, top: 918 - sy, right: width - 20, bottom: 936 - sy };
     draw_text_clean(mem_dc, &config_path.display().to_string(), &mut config_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-    render_choice_pill(mem_dc, 20, 894 - sy, 180, 28, "📁 打开配置目录", false, hover_btn == 151, font_scale);
+    render_choice_pill(mem_dc, 20, 942 - sy, 180, 28, "📁 打开配置目录", false, hover_btn == 151, font_scale);
 
     SelectObject(mem_dc, old_f);
     DeleteObject(f_title);
@@ -1704,4 +1747,5 @@ mod tests {
     fn test_rename_message_constant() {
         assert_eq!(WM_DEVICE_RENAME, 0x8000 + 101);
     }
+
 }
