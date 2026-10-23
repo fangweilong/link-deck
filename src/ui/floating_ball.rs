@@ -31,9 +31,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 pub const BALL_SIZE: i32 = 48;
-/// Docked window height. The docked widget is a half ring whose flat side sits
-/// exactly on the screen edge, so only ~27px of the window width is painted.
-pub const DOCK_H: i32 = 56;
+/// 窗口高度取收纳态拉手的高度，悬停时的完整球体居中绘制在同一个窗口里。
+pub const DOCK_H: i32 = 64;
+/// 贴边拉手宽度：右侧贴屏幕，左侧两个角做圆角。
+const TAB_W: i32 = 24;
+const TAB_RADIUS: f32 = 9.0;
 pub const EXPANDED_HEIGHT: i32 = 205;
 const CLR_COLORKEY: COLORREF = 0x00FF00FF; // Magenta colorkey for transparent edges
 const TIMER_BALL_ANIM: usize = 1001;
@@ -491,16 +493,27 @@ unsafe extern "system" fn ball_wnd_proc(
                 };
 
             if !expanded {
-                render_ball_widget(
-                    mem_dc,
-                    width,
-                    height,
-                    &devices,
-                    carousel_index,
-                    pulse_phase,
-                    font_scale,
-                    hover,
-                );
+                if hover {
+                    render_ball_widget(
+                        mem_dc,
+                        width,
+                        height,
+                        &devices,
+                        carousel_index,
+                        pulse_phase,
+                        font_scale,
+                    );
+                } else {
+                    render_tab_widget(
+                        mem_dc,
+                        width,
+                        height,
+                        &devices,
+                        carousel_index,
+                        pulse_phase,
+                        font_scale,
+                    );
+                }
             } else {
                 render_expanded_drawer(mem_dc, width, height, &devices, font_scale, hover_btn);
             }
@@ -684,6 +697,228 @@ unsafe extern "system" fn ball_wnd_proc(
     }
 }
 
+
+/// 左圆角、右侧齐平的贴边拉手：屏幕边就是它的天然收口，不会被看成“被裁掉的圆”。
+unsafe fn tab_inside(px: f32, py: f32, x0: f32, x1: f32, y0: f32, y1: f32, r: f32) -> bool {
+    if py < y0 || py > y1 || px < x0 || px > x1 {
+        return false;
+    }
+    if px >= x0 + r {
+        return true;
+    }
+    let cx = x0 + r;
+    if py < y0 + r {
+        return (px - cx).powi(2) + (py - (y0 + r)).powi(2) <= r * r;
+    }
+    if py > y1 - r {
+        return (px - cx).powi(2) + (py - (y1 - r)).powi(2) <= r * r;
+    }
+    true
+}
+
+fn blend(dst: (u8, u8, u8), src: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
+    let t = t.clamp(0.0, 1.0);
+    (
+        (dst.0 as f32 * (1.0 - t) + src.0 as f32 * t) as u8,
+        (dst.1 as f32 * (1.0 - t) + src.1 as f32 * t) as u8,
+        (dst.2 as f32 * (1.0 - t) + src.2 as f32 * t) as u8,
+    )
+}
+
+unsafe fn render_tab_widget(
+    hdc: HDC,
+    w: i32,
+    h: i32,
+    devices: &[DeviceSnapshot],
+    carousel_index: usize,
+    pulse_phase: f32,
+    font_scale: f32,
+) {
+    let active_list = get_carousel_devices(devices);
+    let total_devs = active_list.len();
+    let cur_dev = if total_devs > 0 {
+        active_list.get(carousel_index % total_devs).copied()
+    } else {
+        None
+    };
+
+    let (pct, charging, chg_source, online, kind) = if let Some(d) = cur_dev {
+        (
+            d.battery.percentage,
+            d.battery.charging,
+            d.battery.charging_source,
+            d.battery.online,
+            d.kind,
+        )
+    } else {
+        (None, false, crate::devices::ChargingSource::None, false, DeviceKind::Other)
+    };
+
+    let accent = if charging {
+        let pulse = 0.82 + 0.18 * pulse_phase.sin();
+        let g = (210.0 + 45.0 * pulse_phase.sin()).clamp(165.0, 255.0) as u8;
+        let b = (255.0 * pulse.clamp(0.85, 1.0)) as u8;
+        (0u8, g, b)
+    } else if let Some(p) = pct {
+        if p >= 50 {
+            (16u8, 185u8, 129u8)
+        } else if p >= 20 {
+            (245u8, 158u8, 11u8)
+        } else {
+            (239u8, 68u8, 68u8)
+        }
+    } else {
+        (80u8, 92u8, 108u8)
+    };
+
+    let bg = (0x16u8, 0x19u8, 0x1Eu8);
+    // 整块染色会太抢眼，只用很淡的充能底色 + 一圈电量色描边
+    let level_rgb = blend(bg, accent, 0.12);
+    let border_rgb = blend(bg, accent, 0.62);
+
+    let x0 = (w - TAB_W) as f32;
+    let x1 = w as f32;
+    let y0 = 1.0f32;
+    let y1 = h as f32 - 1.0;
+    let level_y = y1 - (h as f32) * (pct.unwrap_or(0).min(100) as f32 / 100.0);
+
+    let mut pixels = vec![CLR_COLORKEY; (w * h) as usize];
+    let sub = [0.2f32, 0.5f32, 0.8f32];
+    let n_sub = 9.0f32;
+
+    for y in 0..h {
+        for x in 0..w {
+            let mut inside = 0.0f32;
+            let mut edge = 0.0f32;
+            let mut filled = 0.0f32;
+
+            for &sy in &sub {
+                for &sx in &sub {
+                    let px = x as f32 + sx;
+                    let py = y as f32 + sy;
+                    if tab_inside(px, py, x0, x1, y0, y1, TAB_RADIUS) {
+                        inside += 1.0;
+                        // 右边界贴着屏幕，不描边，避免出现“断口”
+                        if !tab_inside(
+                            px,
+                            py,
+                            x0 + 1.0,
+                            x1,
+                            y0 + 1.0,
+                            y1 - 1.0,
+                            (TAB_RADIUS - 1.0).max(0.0),
+                        ) {
+                            edge += 1.0;
+                        }
+                        if py >= level_y {
+                            filled += 1.0;
+                        }
+                    }
+                }
+            }
+
+            if inside <= 0.0 {
+                continue;
+            }
+
+            let alpha = inside / n_sub;
+            let rgb = blend(
+                blend(bg, level_rgb, filled / n_sub),
+                border_rgb,
+                edge / n_sub,
+            );
+            let r = (rgb.0 as f32 * alpha) as u32;
+            let g = (rgb.1 as f32 * alpha) as u32;
+            let b = (rgb.2 as f32 * alpha) as u32;
+            pixels[(y * w + x) as usize] = (r << 16) | (g << 8) | b;
+        }
+    }
+
+    let mut bmi: BITMAPINFO = mem::zeroed();
+    bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+    bmi.bmiHeader.biWidth = w;
+    bmi.bmiHeader.biHeight = -h;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB as u32;
+
+    SetDIBitsToDevice(
+        hdc,
+        0,
+        0,
+        w as u32,
+        h as u32,
+        0,
+        0,
+        0,
+        h as u32,
+        pixels.as_ptr() as _,
+        &bmi,
+        DIB_RGB_COLORS,
+    );
+
+    SetBkMode(hdc, TRANSPARENT as i32);
+
+    // 设备图标 / 电量数字 / 轮播点：与完整球体同一套内容，只是排成竖条
+    let icon_size = (11.0 * font_scale).round().clamp(10.0, 12.0) as i32;
+    let font_icon = create_clear_font(icon_size, true);
+    let old_font = SelectObject(hdc, font_icon);
+    let (icon_str, icon_clr) = if charging || chg_source.is_charging() {
+        ("⚡", CLR_CYAN)
+    } else {
+        let sym = match kind {
+            DeviceKind::Keyboard => "⌨",
+            DeviceKind::Mouse => "🖱",
+            DeviceKind::Headset => "🎧",
+            _ => "📱",
+        };
+        (sym, CLR_TEXT_MUTED)
+    };
+    SetTextColor(hdc, icon_clr);
+    let mut icon_rect = RECT {
+        left: (w - TAB_W) as i32,
+        top: 6,
+        right: w,
+        bottom: 24,
+    };
+    draw_text_clean(hdc, icon_str, &mut icon_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+    let pct_size = (11.0 * font_scale).round().clamp(10.0, 11.0) as i32;
+    let font_pct = create_clear_font(pct_size, true);
+    SelectObject(hdc, font_pct);
+    SetTextColor(hdc, if online { CLR_TEXT } else { CLR_TEXT_MUTED });
+    let pct_str = if let Some(p) = pct {
+        format!("{}", p)
+    } else if online {
+        "ON".to_string()
+    } else {
+        "--".to_string()
+    };
+    let mut pct_rect = RECT {
+        left: (w - TAB_W) as i32,
+        top: 25,
+        right: w,
+        bottom: 43,
+    };
+    draw_text_clean(hdc, &pct_str, &mut pct_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+    SelectObject(hdc, old_font);
+    DeleteObject(font_pct);
+    DeleteObject(font_icon);
+
+    if total_devs >= 2 {
+        let cur_idx = carousel_index % total_devs;
+        for i in 0..total_devs.min(3) {
+            let (dot_clr, dot_r) = if i == cur_idx {
+                (CLR_CYAN, 2)
+            } else {
+                (CLR_TEXT_MUTED, 1)
+            };
+            draw_dot(hdc, w - 5, 46 + (i as i32) * 4, dot_r, dot_clr);
+        }
+    }
+}
+
 /// Render the circular/pill Edge Floating Ball
 unsafe fn render_ball_widget(
     hdc: HDC,
@@ -693,7 +928,6 @@ unsafe fn render_ball_widget(
     carousel_index: usize,
     pulse_phase: f32,
     font_scale: f32,
-    hover: bool,
 ) {
     let active_list = get_carousel_devices(devices);
     let total_devs = active_list.len();
@@ -719,24 +953,17 @@ unsafe fn render_ball_widget(
     let mut pixels = vec![CLR_COLORKEY; (w * h) as usize];
     let cy = (h - 1) as f32 / 2.0;
 
-    // Docked: half ring whose flat side sits exactly on the screen edge, so the
-    // circle center is the right window border and only the left flank is painted.
-    // Hovered: full energy ball, centered like before.
-    let docked = !hover;
-    let (cx, r_ball, r_mid, r_thickness, sweep_total, arc_dir) = if docked {
-        (w as f32, 27.0f32, 23.0f32, 3.8f32, std::f32::consts::PI, -1.0f32)
-    } else {
-        ((w - 1) as f32 / 2.0, 22.5f32, 18.5f32, 3.6f32, std::f32::consts::TAU, 1.0f32)
-    };
+    let cx = (w - 1) as f32 / 2.0;
+    let r_ball = 22.5f32;
+    let r_mid = 18.5f32;
+    let r_thickness = 3.6f32;
+    let sweep_total = std::f32::consts::TAU;
+    let arc_dir = 1.0f32;
     let r_outer = r_mid + r_thickness / 2.0;
     let r_inner = r_mid - r_thickness / 2.0;
     let cap_r = r_thickness / 2.0;
 
-    let ball_bg_rgb = if hover {
-        (0x28u8, 0x2Eu8, 0x36u8)
-    } else {
-        (0x18u8, 0x1Bu8, 0x20u8)
-    };
+    let ball_bg_rgb = (0x28u8, 0x2Eu8, 0x36u8);
     let track_rgb = (0x28u8, 0x2Eu8, 0x38u8);
 
     let arc_rgb = if charging {
@@ -760,8 +987,7 @@ unsafe fn render_ball_widget(
     let eff_pct = pct.unwrap_or(0).min(100);
     let sweep_rad = (eff_pct as f32 / 100.0) * sweep_total;
 
-    // Arc parameter 0 = 12 o'clock. Full ball runs clockwise, the docked half
-    // ring runs down the left flank (top -> edge -> bottom).
+    // 弧参数 0 位于 12 点，顺时针推进。
     let arc_point = |s: f32| {
         let a = -std::f32::consts::FRAC_PI_2 + arc_dir * s;
         (cx + r_mid * a.cos(), cy + r_mid * a.sin())
@@ -796,10 +1022,6 @@ unsafe fn render_ball_widget(
                             let mut angle = dy.atan2(dx) + std::f32::consts::FRAC_PI_2;
                             if angle < 0.0 {
                                 angle += 2.0 * std::f32::consts::PI;
-                            }
-                            if docked {
-                                angle = (-angle + 2.0 * std::f32::consts::PI)
-                                    % (2.0 * std::f32::consts::PI);
                             }
                             if d >= r_inner && d <= r_outer && angle <= sweep_rad {
                                 arc_hits += 1.0;
@@ -877,8 +1099,7 @@ unsafe fn render_ball_widget(
 
     SetBkMode(hdc, TRANSPARENT as i32);
 
-    // 3. Center Content: hovered ball keeps icon + percentage; the docked gauge
-    //    only shows the percentage, right-aligned against the screen edge.
+    // 3. Center Content: 设备图标 / 电量数字 / 轮播点
     let pct_str = if let Some(p) = pct {
         format!("{}", p)
     } else if online {
@@ -887,89 +1108,60 @@ unsafe fn render_ball_widget(
         "--".to_string()
     };
 
-    if docked {
-        // Kept small so three digits still fit between the ring and the edge.
-        let font_pct_size = (11.0 * font_scale).round().clamp(10.0, 11.0) as i32;
-        let font_pct = create_clear_font(font_pct_size, true);
-        let old_font = SelectObject(hdc, font_pct);
-        SetTextColor(hdc, if !online { CLR_TEXT_MUTED } else { CLR_TEXT });
-        let mut pct_rect = RECT {
-            left: 0,
-            top: (cy - 8.0) as i32,
-            right: w - 2,
-            bottom: (cy + 8.0) as i32,
-        };
-        draw_text_clean(hdc, &pct_str, &mut pct_rect, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
-        SelectObject(hdc, old_font);
-        DeleteObject(font_pct);
+    let font_icon_size = (11.0 * font_scale).round() as i32;
+    let font_icon = create_clear_font(font_icon_size, true);
+    let old_font = SelectObject(hdc, font_icon);
+
+    let (icon_str, icon_clr) = if charging || chg_source.is_charging() {
+        ("⚡", CLR_CYAN)
     } else {
-        let font_icon_size = (11.0 * font_scale).round() as i32;
-        let font_icon = create_clear_font(font_icon_size, true);
-        let old_font = SelectObject(hdc, font_icon);
-
-        let (icon_str, icon_clr) = if charging || chg_source.is_charging() {
-            ("⚡", CLR_CYAN)
-        } else {
-            let sym = match kind {
-                DeviceKind::Keyboard => "⌨",
-                DeviceKind::Mouse => "🖱",
-                DeviceKind::Headset => "🎧",
-                _ => "📱",
-            };
-            (sym, CLR_TEXT_MUTED)
+        let sym = match kind {
+            DeviceKind::Keyboard => "⌨",
+            DeviceKind::Mouse => "🖱",
+            DeviceKind::Headset => "🎧",
+            _ => "📱",
         };
-        SetTextColor(hdc, icon_clr);
-        let mut icon_rect = RECT {
-            left: 0,
-            top: (cy - 19.0) as i32,
-            right: w,
-            bottom: (cy - 6.0) as i32,
-        };
-        draw_text_clean(hdc, icon_str, &mut icon_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-        let font_pct_size = (13.0 * font_scale).round() as i32;
-        let font_pct = create_clear_font(font_pct_size, true);
-        SelectObject(hdc, font_pct);
-        SetTextColor(hdc, if !online { CLR_TEXT_MUTED } else { CLR_TEXT });
+        (sym, CLR_TEXT_MUTED)
+    };
+    SetTextColor(hdc, icon_clr);
+    let mut icon_rect = RECT {
+        left: 0,
+        top: (cy - 19.0) as i32,
+        right: w,
+        bottom: (cy - 6.0) as i32,
+    };
+    draw_text_clean(hdc, icon_str, &mut icon_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+    let font_pct_size = (13.0 * font_scale).round() as i32;
+    let font_pct = create_clear_font(font_pct_size, true);
+    SelectObject(hdc, font_pct);
+    SetTextColor(hdc, if !online { CLR_TEXT_MUTED } else { CLR_TEXT });
 
-        let mut pct_rect = RECT {
-            left: 0,
-            top: (cy - 3.0) as i32,
-            right: w,
-            bottom: (cy + 10.0) as i32,
-        };
-        draw_text_clean(hdc, &pct_str, &mut pct_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+    let mut pct_rect = RECT {
+        left: 0,
+        top: (cy - 3.0) as i32,
+        right: w,
+        bottom: (cy + 10.0) as i32,
+    };
+    draw_text_clean(hdc, &pct_str, &mut pct_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
-        SelectObject(hdc, old_font);
-        DeleteObject(font_pct);
-        DeleteObject(font_icon);
-    }
-
+    SelectObject(hdc, old_font);
+    DeleteObject(font_pct);
+    DeleteObject(font_icon);
     // 4. Carousel Pagination Dots: vertical column on the flat edge when docked,
     //    horizontal row under the percentage when hovering.
     if total_devs >= 2 {
         let cur_idx = carousel_index % total_devs;
-        if docked {
-            for i in 0..total_devs.min(3) {
-                let (dot_clr, dot_r) = if i == cur_idx {
-                    (CLR_CYAN, 2)
-                } else {
-                    (CLR_TEXT_MUTED, 1)
-                };
-                draw_dot(hdc, w - 4, (cy as i32) + 11 + (i as i32) * 4, dot_r, dot_clr);
-            }
-        } else {
-            let spacing = 6;
-            let start_x = (w - ((total_devs as i32 - 1) * spacing)) / 2;
-            let dot_y = (cy as i32) + 14;
+        let spacing = 6;
+        let start_x = (w - ((total_devs as i32 - 1) * spacing)) / 2;
+        let dot_y = (cy as i32) + 14;
 
-            for i in 0..total_devs {
-                let (dot_clr, dot_r) = if i == cur_idx {
-                    (CLR_CYAN, 2)
-                } else {
-                    (CLR_TEXT_MUTED, 1)
-                };
-                draw_dot(hdc, start_x + (i as i32) * spacing, dot_y, dot_r, dot_clr);
-            }
+        for i in 0..total_devs {
+            let (dot_clr, dot_r) = if i == cur_idx {
+                (CLR_CYAN, 2)
+            } else {
+                (CLR_TEXT_MUTED, 1)
+            };
+            draw_dot(hdc, start_x + (i as i32) * spacing, dot_y, dot_r, dot_clr);
         }
     }
 }
@@ -1262,4 +1454,5 @@ mod tests {
         assert_eq!(carousel.len(), 1);
         assert_eq!(carousel[0].id, "mouse");
     }
+
 }
