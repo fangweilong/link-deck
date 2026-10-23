@@ -1,5 +1,6 @@
 #![allow(unsafe_op_in_unsafe_fn, static_mut_refs, dead_code, unused_variables)]
 
+use crate::config::FloatingBallStyle;
 use crate::devices::types::{DeviceKind, DeviceSnapshot};
 use std::mem;
 use std::ptr;
@@ -94,6 +95,8 @@ pub struct BallStateData {
     pub cur_y: i32,
     pub hover: bool,
     pub hover_btn: i32,
+    /// 停靠形态由用户选择，悬停不再切换形状（切换会导致鼠标反复进出窗口而闪烁）
+    pub style: FloatingBallStyle,
     /// Layered-window alpha (0-255) chosen by the user for the docked gauge.
     pub opacity: u8,
     pub host_hwnd: HWND,
@@ -110,6 +113,7 @@ impl FloatingBallWindow {
         initial_enabled: bool,
         font_scale: f32,
         opacity: u8,
+        style: FloatingBallStyle,
     ) -> Result<Self, String> {
         unsafe {
             let instance = GetModuleHandleW(ptr::null());
@@ -146,6 +150,7 @@ impl FloatingBallWindow {
                 hover: false,
                 hover_btn: 0,
                 opacity,
+                style,
                 host_hwnd,
                 hwnd: ptr::null_mut(),
                 tooltip_hwnd: ptr::null_mut(),
@@ -253,6 +258,16 @@ impl FloatingBallWindow {
                         SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     );
                 }
+            }
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(self.hwnd, ptr::null(), 0);
+        }
+    }
+
+    /// 切换停靠形态（拉手 / 完整圆球），即时重绘。
+    pub fn set_style(&self, style: FloatingBallStyle) {
+        unsafe {
+            if let Some(state_arc) = &BALL_STATE {
+                state_arc.lock().unwrap().style = style;
             }
             windows_sys::Win32::Graphics::Gdi::InvalidateRect(self.hwnd, ptr::null(), 0);
         }
@@ -476,7 +491,7 @@ unsafe extern "system" fn ball_wnd_proc(
             let mem_bmp = CreateCompatibleBitmap(hdc, width, height);
             let old_bmp = SelectObject(mem_dc, mem_bmp);
 
-            let (devices, expanded, font_scale, hover, hover_btn, carousel_index, pulse_phase) =
+            let (devices, expanded, font_scale, hover, hover_btn, carousel_index, pulse_phase, style) =
                 if let Some(state_arc) = &BALL_STATE {
                     let state = state_arc.lock().unwrap();
                     (
@@ -487,14 +502,15 @@ unsafe extern "system" fn ball_wnd_proc(
                         state.hover_btn,
                         state.carousel_index,
                         state.pulse_phase,
+                        state.style,
                     )
                 } else {
-                    (Vec::new(), false, 1.15, false, 0, 0, 0.0)
+                    (Vec::new(), false, 1.15, false, 0, 0, 0.0, FloatingBallStyle::Tab)
                 };
 
             if !expanded {
-                if hover {
-                    render_ball_widget(
+                match style {
+                    FloatingBallStyle::Tab => render_tab_widget(
                         mem_dc,
                         width,
                         height,
@@ -502,17 +518,11 @@ unsafe extern "system" fn ball_wnd_proc(
                         carousel_index,
                         pulse_phase,
                         font_scale,
-                    );
-                } else {
-                    render_tab_widget(
-                        mem_dc,
-                        width,
-                        height,
-                        &devices,
-                        carousel_index,
-                        pulse_phase,
-                        font_scale,
-                    );
+                        hover,
+                    ),
+                    FloatingBallStyle::Orb => {
+                        render_ball_widget(mem_dc, width, height, &devices, carousel_index, pulse_phase, font_scale)
+                    }
                 }
             } else {
                 render_expanded_drawer(mem_dc, width, height, &devices, font_scale, hover_btn);
@@ -733,6 +743,7 @@ unsafe fn render_tab_widget(
     carousel_index: usize,
     pulse_phase: f32,
     font_scale: f32,
+    hover: bool,
 ) {
     let active_list = get_carousel_devices(devices);
     let total_devs = active_list.len();
@@ -771,8 +782,8 @@ unsafe fn render_tab_widget(
         (80u8, 92u8, 108u8)
     };
 
-    let bg = (0x16u8, 0x19u8, 0x1Eu8);
-    let border_rgb = blend(bg, accent, 0.45);
+    let bg = if hover { (0x1Eu8, 0x22u8, 0x28u8) } else { (0x16u8, 0x19u8, 0x1Eu8) };
+    let border_rgb = blend(bg, accent, if hover { 0.70 } else { 0.45 });
     let track_rgb = (0x2Cu8, 0x32u8, 0x3Au8);
 
     let x0 = (w - TAB_W) as f32;
@@ -1467,4 +1478,54 @@ mod tests {
     }
 
 
+
+    /// 渲染到离屏 DIB 并返回像素，用于形状级断言。
+    #[cfg(test)]
+    fn render_to_pixels(hover: bool, style: FloatingBallStyle) -> Vec<u32> {
+        use windows_sys::Win32::Graphics::Gdi::{
+            CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO,
+            BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+        };
+        unsafe {
+            let (w, h) = (BALL_SIZE, DOCK_H);
+            let mut bmi: BITMAPINFO = mem::zeroed();
+            bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+            bmi.bmiHeader.biWidth = w;
+            bmi.bmiHeader.biHeight = -h;
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB as u32;
+            let mut bits: *mut core::ffi::c_void = ptr::null_mut();
+            let bmp = CreateDIBSection(ptr::null_mut(), &bmi, DIB_RGB_COLORS as u32, &mut bits, ptr::null_mut(), 0);
+            let dc = CreateCompatibleDC(ptr::null_mut());
+            let old = SelectObject(dc, bmp);
+            SetBkMode(dc, TRANSPARENT as i32);
+            let dev = create_test_dev("kbd", "RK108", DeviceKind::Keyboard, Some(72), false, true);
+            let dev2 = create_test_dev("mouse", "X2", DeviceKind::Mouse, Some(45), false, true);
+            let list = [dev, dev2];
+            match style {
+                FloatingBallStyle::Tab => render_tab_widget(dc, w, h, &list, 0, 0.0, 1.15, hover),
+                FloatingBallStyle::Orb => {
+                    render_ball_widget(dc, w, h, &list, 0, 0.0, 1.15);
+                }
+            }
+            let px = std::slice::from_raw_parts(bits as *const u32, (w * h) as usize).to_vec();
+            SelectObject(dc, old);
+            DeleteObject(bmp);
+            DeleteDC(dc);
+            px
+        }
+    }
+
+    #[test]
+    fn hover_never_changes_the_painted_footprint() {
+        // 悬停只允许改配色：一旦形状变化，处于两个形状差集里的光标会反复进出窗口 → 闪烁。
+        for style in [FloatingBallStyle::Tab, FloatingBallStyle::Orb] {
+            let calm = render_to_pixels(false, style);
+            let hovered = render_to_pixels(true, style);
+            let mask = |px: &[u32]| -> Vec<bool> { px.iter().map(|p| *p != CLR_COLORKEY).collect() };
+            assert_eq!(mask(&calm), mask(&hovered), "hover changed the painted shape of {style:?}");
+            assert!(calm.iter().any(|p| *p != CLR_COLORKEY), "widget painted nothing");
+        }
+    }
 }

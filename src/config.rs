@@ -41,6 +41,15 @@ pub enum DeviceSort {
     Updated,
 }
 
+/// 停靠形态：贴边拉手（省空间）或完整能量球。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FloatingBallStyle {
+    #[default]
+    Tab,
+    Orb,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AccentTheme {
@@ -62,6 +71,9 @@ pub struct AppConfig {
     /// The expanded drawer keeps its own readable floor regardless of this value.
     #[serde(default = "default_ball_opacity")]
     pub floating_ball_opacity: u8,
+    /// Docked widget shape; hover never changes it (shape-swapping on hover used to flicker)
+    #[serde(default)]
+    pub floating_ball_style: FloatingBallStyle,
     /// Polling interval in milliseconds
     pub poll_interval_ms: u64,
     /// UI Font size scale factor (1.0 = standard, 1.15 = medium, 1.3 = large)
@@ -148,6 +160,7 @@ impl Default for AppConfig {
             enable_floating_ball: true, // Default: enabled on screen edge
             floating_ball_y_ratio: 0.75, // Lower-right area above taskbar
             floating_ball_opacity: default_ball_opacity(),
+            floating_ball_style: FloatingBallStyle::Tab,
             poll_interval_ms: 300_000,   // Default: 5 minutes (300,000 ms)
             font_scale: 1.15,            // Clear, comfortably readable font scale
             panel_width: 640,

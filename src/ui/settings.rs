@@ -49,6 +49,7 @@ pub struct Ctx {
     pub poll_ms: u64,
     pub ball_on: bool,
     pub ball_opacity: u8,
+    pub ball_style: crate::config::FloatingBallStyle,
     pub enable_toast: bool,
     pub toast_info: u8,
     pub toast_warn: u8,
@@ -199,8 +200,22 @@ fn build(ctx: &Ctx) -> Vec<Card> {
     cards.push(Card {
         group: 1,
         title: "贴边悬浮球".into(),
-        desc: Some("贴边为 26×64 圆角拉手（只占 26px），左侧竖向电量条，悬停还原完整能量球。".into()),
+        desc: Some("停靠形态二选一，悬停不再切换形状：拉手只占 26px，圆球更大更醒目。".into()),
         rows: vec![
+            Row::Pills(vec![
+                pill(
+                    "🧩 贴边拉手",
+                    52,
+                    matches!(ctx.ball_style, crate::config::FloatingBallStyle::Tab),
+                    116,
+                ),
+                pill(
+                    "⚪ 完整圆球",
+                    53,
+                    matches!(ctx.ball_style, crate::config::FloatingBallStyle::Orb),
+                    116,
+                ),
+            ]),
             Row::Pills(vec![pill(
                 if ctx.ball_on { "🔘 已开启" } else { "⚪ 已关闭" },
                 50,
@@ -476,11 +491,19 @@ pub fn nav_hit(page: &Page, x: i32, y: i32) -> Option<usize> {
 // 绘制
 // --------------------------------------------------------------------------
 
-pub unsafe fn paint_nav(hdc: HDC, page: &Page, scroll: i32, hover: i32, font_scale: f32) {
-    // 当前分组 = 内容坐标 scroll 之上最靠下的那一个
+pub unsafe fn paint_nav(
+    hdc: HDC,
+    page: &Page,
+    scroll: i32,
+    hover: i32,
+    font_scale: f32,
+    viewport_h: i32,
+) {
+    // 高亮跟随视口中线所在的分组，避免半张卡片在顶部时高亮跳错
+    let probe = scroll + (viewport_h / 2).max(16);
     let mut current = 0;
     for (group, top) in page.group_tops.iter().enumerate() {
-        if *top <= scroll + 16 {
+        if *top <= probe {
             current = group;
         }
     }
@@ -653,6 +676,7 @@ mod tests {
             poll_ms: c.poll_interval_ms,
             ball_on: c.enable_floating_ball,
             ball_opacity: c.floating_ball_opacity,
+            ball_style: c.floating_ball_style,
             enable_toast: c.enable_battery_toast,
             toast_info: c.toast_threshold_info,
             toast_warn: c.toast_threshold_warning,

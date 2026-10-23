@@ -50,6 +50,8 @@ pub const WM_SAVE_AUTOSTART: u32 = 0x8000 + 111;
 pub const WM_SET_BALL_OPACITY: u32 = 0x8000 + 112;
 /// 拖拽结束才落盘，避免拖拽过程中逐像素写文件。
 pub const WM_SAVE_BALL_OPACITY: u32 = 0x8000 + 113;
+/// wParam: 0 = 贴边拉手，1 = 完整圆球。
+pub const WM_SET_BALL_STYLE: u32 = 0x8000 + 114;
 pub const WM_DEVICE_RENAME: u32 = 0x8000 + 101;
 pub const WM_SAVE_TOAST_SETTINGS: u32 = 0x8000 + 104;
 
@@ -83,6 +85,7 @@ pub struct PanelStateData {
     pub font_scale: f32,
     pub poll_interval_ms: u64,
     pub ball_opacity: u8,
+    pub ball_style: crate::config::FloatingBallStyle,
     pub ui_density: crate::config::UiDensity,
     pub scroll_y: i32,
     pub settings_scroll_y: i32,
@@ -142,6 +145,7 @@ impl PanelWindow {
                 font_scale: config.font_scale,
                 poll_interval_ms: config.poll_interval_ms,
                 ball_opacity: config.floating_ball_opacity,
+                ball_style: config.floating_ball_style,
                 ui_density: config.ui_density,
                 scroll_y: 0,
                 settings_scroll_y: 0,
@@ -201,6 +205,7 @@ impl PanelWindow {
         devices: &[DeviceSnapshot],
         ball_enabled: bool,
         ball_opacity: u8,
+        ball_style: crate::config::FloatingBallStyle,
         font_scale: f32,
         poll_interval_ms: u64,
         ui_density: crate::config::UiDensity,
@@ -213,6 +218,7 @@ impl PanelWindow {
                 state.font_scale = font_scale;
                 state.poll_interval_ms = poll_interval_ms;
                 state.ball_opacity = ball_opacity;
+                state.ball_style = ball_style;
                 state.next_refresh_seconds = poll_interval_ms / 1000;
                 state.ui_density = ui_density;
                 let filtered_count = prepare_devices(state.devices.clone(), state.device_filter, state.device_sort).len();
@@ -793,7 +799,14 @@ unsafe extern "system" fn panel_wnd_proc(
                     .map(|sa| settings_ctx(&sa.lock().unwrap()))
                     .unwrap_or_else(fallback_settings_ctx);
                 let page = settings::layout(&ctx, width);
-                settings::paint_nav(mem_dc, &page, settings_scroll_y, hover_btn, font_scale);
+                settings::paint_nav(
+                    mem_dc,
+                    &page,
+                    settings_scroll_y,
+                    hover_btn,
+                    font_scale,
+                    (height - 62 - settings::CONTENT_TOP).max(1),
+                );
                 // Cards scroll under a fixed clip; the nav strip above stays put.
                 let settings_clip = CreateRectRgn(
                     0,
@@ -1148,6 +1161,7 @@ fn settings_ctx(state: &PanelStateData) -> settings::Ctx {
         poll_ms: state.poll_interval_ms,
         ball_on: state.floating_ball_enabled,
         ball_opacity: state.ball_opacity,
+        ball_style: state.ball_style,
         enable_toast: state.enable_toast,
         toast_info: state.toast_info,
         toast_warn: state.toast_warning,
@@ -1174,6 +1188,7 @@ fn fallback_settings_ctx() -> settings::Ctx {
         poll_ms: config.poll_interval_ms,
         ball_on: config.enable_floating_ball,
         ball_opacity: config.floating_ball_opacity,
+        ball_style: config.floating_ball_style,
         enable_toast: config.enable_battery_toast,
         toast_info: config.toast_threshold_info,
         toast_warn: config.toast_threshold_warning,
@@ -1225,6 +1240,8 @@ unsafe fn dispatch_settings_click(hwnd: HWND, host: HWND, id: i32) {
         41 => send_cmd(crate::ui::tray::IDM_FONT_SCALE_115),
         42 => send_cmd(crate::ui::tray::IDM_FONT_SCALE_130),
         50 => send_cmd(crate::ui::tray::IDM_TOGGLE_BALL),
+        52 => set_ball_style(hwnd, host, crate::config::FloatingBallStyle::Tab),
+        53 => set_ball_style(hwnd, host, crate::config::FloatingBallStyle::Orb),
         60 => toggle_state(&|s: &mut PanelStateData| s.enable_toast = !s.enable_toast),
         61 => toggle_state(&|s: &mut PanelStateData| s.toast_gaming_suppression = !s.toast_gaming_suppression),
         62 => toggle_state(&|s: &mut PanelStateData| s.enable_low_battery_sound = !s.enable_low_battery_sound),
@@ -1289,6 +1306,17 @@ unsafe fn dispatch_settings_click(hwnd: HWND, host: HWND, id: i32) {
         151 => open_config_dir(),
         _ => {}
     }
+}
+
+unsafe fn set_ball_style(hwnd: HWND, host: HWND, style: crate::config::FloatingBallStyle) {
+    if let Some(state_arc) = &PANEL_STATE {
+        state_arc.lock().unwrap().ball_style = style;
+    }
+    if !host.is_null() {
+        let code = if matches!(style, crate::config::FloatingBallStyle::Tab) { 0 } else { 1 };
+        PostMessageW(host, WM_SET_BALL_STYLE, code as WPARAM, 0);
+    }
+    windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
 }
 
 unsafe fn set_dashboard_filter(hwnd: HWND, host: HWND, filter: crate::config::DeviceFilter) {
@@ -1612,6 +1640,7 @@ mod tests {
     fn test_rename_message_constant() {
         assert_eq!(WM_DEVICE_RENAME, 0x8000 + 101);
     }
+
 
 
 

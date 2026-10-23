@@ -335,6 +335,7 @@ fn main() {
     let initial_font_scale = config.font_scale;
     let initial_poll_ms = config.poll_interval_ms;
     let initial_ball_alpha = config.ball_alpha();
+    let initial_ball_style = config.floating_ball_style;
     unsafe {
         let instance = GetModuleHandleW(ptr::null());
         let class_name: Vec<u16> = "LinkDeck_HiddenHost\0".encode_utf16().collect();
@@ -375,7 +376,13 @@ fn main() {
 
         // Create Edge-sticking Floating Ball Window
         let floating_ball =
-            FloatingBallWindow::new(hwnd, initial_ball_enabled, initial_font_scale, initial_ball_alpha)
+            FloatingBallWindow::new(
+                hwnd,
+                initial_ball_enabled,
+                initial_font_scale,
+                initial_ball_alpha,
+                initial_ball_style,
+            )
                 .expect("Failed to create floating ball");
 
         // Create Management Panel Window
@@ -457,7 +464,7 @@ fn toggle_floating_ball() {
 
             let snaps = app.manager.get_snapshots();
             if let Some(panel) = &app.panel {
-                panel.update_devices(&snaps, enabled, app.config.floating_ball_opacity, font_scale, poll_ms, app.config.ui_density);
+                panel.update_devices(&snaps, enabled, app.config.floating_ball_opacity, app.config.floating_ball_style, font_scale, poll_ms, app.config.ui_density);
             }
         }
     }
@@ -474,7 +481,7 @@ fn set_poll_interval(ms: u64) {
             let scale = app.config.font_scale;
             let snaps = app.manager.get_snapshots();
             if let Some(panel) = &app.panel {
-                panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, scale, ms, app.config.ui_density);
+                panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, app.config.floating_ball_style, scale, ms, app.config.ui_density);
             }
         }
     }
@@ -494,7 +501,7 @@ fn set_font_scale(scale: f32) {
 
             let snaps = app.manager.get_snapshots();
             if let Some(panel) = &app.panel {
-                panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, scale, poll_ms, app.config.ui_density);
+                panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, app.config.floating_ball_style, scale, poll_ms, app.config.ui_density);
             }
         }
     }
@@ -535,7 +542,7 @@ unsafe extern "system" fn host_wnd_proc(
 
                     // Update management panel
                     if let Some(panel) = &app.panel {
-                        panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, font_scale, poll_ms, app.config.ui_density);
+                        panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, app.config.floating_ball_style, font_scale, poll_ms, app.config.ui_density);
                     }
                     // Format tray tooltip
                     let mut tip_lines = Vec::new();
@@ -669,7 +676,7 @@ unsafe extern "system" fn host_wnd_proc(
                             if ball_on { fb.update_devices(&snaps); }
                         }
                         if let Some(panel) = &app.panel {
-                            panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, font_scale, poll_ms, app.config.ui_density);
+                            panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, app.config.floating_ball_style, font_scale, poll_ms, app.config.ui_density);
                             panel.set_refresh_status(&format!("刷新完成 · {} 台设备 · 新增 {} · 变化 {}", result.total, result.added, result.changed));
                         }
                     }
@@ -728,7 +735,7 @@ unsafe extern "system" fn host_wnd_proc(
                         }
                     }
                     if let Some(panel) = &app.panel {
-                        panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, font_scale, poll_ms, app.config.ui_density);
+                        panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, app.config.floating_ball_style, font_scale, poll_ms, app.config.ui_density);
                     }
                 }
             }
@@ -742,7 +749,7 @@ unsafe extern "system" fn host_wnd_proc(
                 let font_scale = app.config.font_scale;
                 let poll_ms = app.config.poll_interval_ms;
                 if let Some(panel) = &app.panel {
-                    panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, font_scale, poll_ms, app.config.ui_density);
+                    panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, app.config.floating_ball_style, font_scale, poll_ms, app.config.ui_density);
                     panel.show();
                 }
             }
@@ -808,6 +815,21 @@ unsafe extern "system" fn host_wnd_proc(
             }
             0
         }
+        crate::ui::panel::WM_SET_BALL_STYLE => {
+            if let Some(app_arc) = &APP_INSTANCE {
+                let mut app = app_arc.lock().unwrap();
+                app.config.floating_ball_style = if wparam == 0 {
+                    crate::config::FloatingBallStyle::Tab
+                } else {
+                    crate::config::FloatingBallStyle::Orb
+                };
+                let _ = app.config.save();
+                if let Some(fb) = &app.floating_ball {
+                    fb.set_style(app.config.floating_ball_style);
+                }
+            }
+            0
+        }
         crate::ui::panel::WM_SAVE_BALL_OPACITY => {
             if let Some(app_arc) = &APP_INSTANCE {
                 let app = app_arc.lock().unwrap();
@@ -865,7 +887,7 @@ unsafe extern "system" fn host_wnd_proc(
                 let font_scale = app.config.font_scale;
                 let poll_ms = app.config.poll_interval_ms;
                 if let Some(panel) = &app.panel {
-                    panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, font_scale, poll_ms, density);
+                    panel.update_devices(&snaps, ball_on, app.config.floating_ball_opacity, app.config.floating_ball_style, font_scale, poll_ms, density);
                 }
             }
             0
