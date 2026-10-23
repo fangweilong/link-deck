@@ -23,16 +23,25 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetClientRect, GetCursorPos, GetSystemMetrics, KillTimer,
     LoadCursorW, RegisterClassExW, SendMessageW, SetLayeredWindowAttributes, SetTimer,
-    SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, IDC_ARROW, LWA_COLORKEY, SM_CXSCREEN,
+    SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, IDC_ARROW, LWA_ALPHA, LWA_COLORKEY,
+    SM_CXSCREEN,
     SM_CYSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WM_DESTROY,
     WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_TIMER,
     WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 pub const BALL_SIZE: i32 = 48;
+/// Docked window height. The docked widget is a half ring whose flat side sits
+/// exactly on the screen edge, so only ~27px of the window width is painted.
+pub const DOCK_H: i32 = 56;
 pub const EXPANDED_HEIGHT: i32 = 205;
 const CLR_COLORKEY: COLORREF = 0x00FF00FF; // Magenta colorkey for transparent edges
 const TIMER_BALL_ANIM: usize = 1001;
+
+// Uniform opacity for the docked gauge and the expanded drawer (0-255).
+// The ball is deliberately translucent so it reads as an overlay, not a block.
+const ALPHA_DOCKED: u8 = 208;
+const ALPHA_EXPANDED: u8 = 238;
 
 pub fn get_expanded_width(font_scale: f32) -> i32 {
     if font_scale >= 1.25 {
@@ -141,7 +150,7 @@ impl FloatingBallWindow {
                 start_x,
                 start_y,
                 BALL_SIZE,
-                BALL_SIZE,
+                DOCK_H,
                 ptr::null_mut(),
                 ptr::null_mut(),
                 instance,
@@ -152,7 +161,7 @@ impl FloatingBallWindow {
                 return Err("Failed to create floating ball window".into());
             }
 
-            SetLayeredWindowAttributes(hwnd, CLR_COLORKEY, 0, LWA_COLORKEY);
+            set_ball_alpha(hwnd, ALPHA_DOCKED);
 
             // Create Tooltip
             let tooltip_hwnd = CreateWindowExW(
@@ -252,9 +261,10 @@ impl FloatingBallWindow {
                         screen_w - BALL_SIZE,
                         cur_y,
                         BALL_SIZE,
-                        BALL_SIZE,
+                        DOCK_H,
                         SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     );
+                    set_ball_alpha(self.hwnd, ALPHA_DOCKED);
                     SetTimer(self.hwnd, TIMER_BALL_ANIM, 100, None);
                     ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
                 } else {
@@ -287,6 +297,11 @@ pub fn get_carousel_devices(devices: &[DeviceSnapshot]) -> Vec<&DeviceSnapshot> 
     } else {
         devices.iter().collect()
     }
+}
+
+/// Sets color-key transparency plus a uniform opacity for the painted pixels.
+pub unsafe fn set_ball_alpha(hwnd: HWND, alpha: u8) {
+    SetLayeredWindowAttributes(hwnd, CLR_COLORKEY, alpha, LWA_COLORKEY | LWA_ALPHA);
 }
 
 pub unsafe fn update_ball_tooltip(tooltip_hwnd: HWND, target_hwnd: HWND, text: &str) {
@@ -497,7 +512,7 @@ unsafe extern "system" fn ball_wnd_proc(
 
                     let screen_w = GetSystemMetrics(SM_CXSCREEN);
                     let screen_h = GetSystemMetrics(SM_CYSCREEN);
-                    let clamped_y = new_y.clamp(20, screen_h - BALL_SIZE - 40);
+                    let clamped_y = new_y.clamp(20, screen_h - DOCK_H - 40);
                     state.cur_y = clamped_y;
 
                     SetWindowPos(
@@ -506,7 +521,7 @@ unsafe extern "system" fn ball_wnd_proc(
                         screen_w - BALL_SIZE,
                         clamped_y,
                         BALL_SIZE,
-                        BALL_SIZE,
+                        DOCK_H,
                         SWP_NOACTIVATE,
                     );
                 } else {
@@ -609,7 +624,7 @@ unsafe extern "system" fn ball_wnd_proc(
                         let exp_w = get_expanded_width(font_scale);
                         (exp_w, EXPANDED_HEIGHT, screen_w - exp_w)
                     } else {
-                        (BALL_SIZE, BALL_SIZE, screen_w - BALL_SIZE)
+                        (BALL_SIZE, DOCK_H, screen_w - BALL_SIZE)
                     };
 
                     SetWindowPos(
@@ -621,6 +636,7 @@ unsafe extern "system" fn ball_wnd_proc(
                         new_h,
                         SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     );
+                    set_ball_alpha(hwnd, if is_exp { ALPHA_EXPANDED } else { ALPHA_DOCKED });
                 }
                 windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
             }
@@ -679,12 +695,17 @@ unsafe fn render_ball_widget(
 
     // 1. Prepare 32-bit DIB pixel buffer (filled with chroma-key CLR_COLORKEY for transparency)
     let mut pixels = vec![CLR_COLORKEY; (w * h) as usize];
-    let cx = (w - 1) as f32 / 2.0;
     let cy = (h - 1) as f32 / 2.0;
 
-    let r_ball = 22.5f32;
-    let r_mid = 18.5f32;
-    let r_thickness = 3.6f32;
+    // Docked: half ring whose flat side sits exactly on the screen edge, so the
+    // circle center is the right window border and only the left flank is painted.
+    // Hovered: full energy ball, centered like before.
+    let docked = !hover;
+    let (cx, r_ball, r_mid, r_thickness, sweep_total, arc_dir) = if docked {
+        (w as f32, 27.0f32, 23.0f32, 3.8f32, std::f32::consts::PI, -1.0f32)
+    } else {
+        ((w - 1) as f32 / 2.0, 22.5f32, 18.5f32, 3.6f32, std::f32::consts::TAU, 1.0f32)
+    };
     let r_outer = r_mid + r_thickness / 2.0;
     let r_inner = r_mid - r_thickness / 2.0;
     let cap_r = r_thickness / 2.0;
@@ -715,13 +736,16 @@ unsafe fn render_ball_widget(
     };
 
     let eff_pct = pct.unwrap_or(0).min(100);
-    let sweep_rad = (eff_pct as f32 / 100.0) * (2.0 * std::f32::consts::PI);
+    let sweep_rad = (eff_pct as f32 / 100.0) * sweep_total;
 
-    let start_cap_x = cx;
-    let start_cap_y = cy - r_mid;
-    let end_angle = sweep_rad - std::f32::consts::FRAC_PI_2;
-    let end_cap_x = cx + r_mid * end_angle.cos();
-    let end_cap_y = cy + r_mid * end_angle.sin();
+    // Arc parameter 0 = 12 o'clock. Full ball runs clockwise, the docked half
+    // ring runs down the left flank (top -> edge -> bottom).
+    let arc_point = |s: f32| {
+        let a = -std::f32::consts::FRAC_PI_2 + arc_dir * s;
+        (cx + r_mid * a.cos(), cy + r_mid * a.sin())
+    };
+    let (start_cap_x, start_cap_y) = arc_point(0.0);
+    let (end_cap_x, end_cap_y) = arc_point(sweep_rad);
 
     // 3x3 subpixel sampling grid for smooth anti-aliased borders and arcs
     let sub = [0.2f32, 0.5f32, 0.8f32];
@@ -750,6 +774,10 @@ unsafe fn render_ball_widget(
                             let mut angle = dy.atan2(dx) + std::f32::consts::FRAC_PI_2;
                             if angle < 0.0 {
                                 angle += 2.0 * std::f32::consts::PI;
+                            }
+                            if docked {
+                                angle = (-angle + 2.0 * std::f32::consts::PI)
+                                    % (2.0 * std::f32::consts::PI);
                             }
                             if d >= r_inner && d <= r_outer && angle <= sweep_rad {
                                 arc_hits += 1.0;
@@ -827,35 +855,8 @@ unsafe fn render_ball_widget(
 
     SetBkMode(hdc, TRANSPARENT as i32);
 
-    // 3. Center Content (Top Icon / ⚡, Bottom Battery Percentage)
-    let font_icon_size = (11.0 * font_scale).round() as i32;
-    let font_icon = create_clear_font(font_icon_size, true);
-    let old_font = SelectObject(hdc, font_icon);
-
-    let (icon_str, icon_clr) = if charging || chg_source.is_charging() {
-        ("⚡", CLR_CYAN)
-    } else {
-        let sym = match kind {
-            DeviceKind::Keyboard => "⌨",
-            DeviceKind::Mouse => "🖱",
-            DeviceKind::Headset => "🎧",
-            _ => "📱",
-        };
-        (sym, CLR_TEXT_MUTED)
-    };
-    SetTextColor(hdc, icon_clr);
-    let mut icon_rect = RECT {
-        left: 0,
-        top: 6,
-        right: w,
-        bottom: 20,
-    };
-    draw_text_clean(hdc, icon_str, &mut icon_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-    let font_pct_size = (13.0 * font_scale).round() as i32;
-    let font_pct = create_clear_font(font_pct_size, true);
-    SelectObject(hdc, font_pct);
-    SetTextColor(hdc, if !online { CLR_TEXT_MUTED } else { CLR_TEXT });
-
+    // 3. Center Content: hovered ball keeps icon + percentage; the docked gauge
+    //    only shows the percentage, right-aligned against the screen edge.
     let pct_str = if let Some(p) = pct {
         format!("{}", p)
     } else if online {
@@ -864,45 +865,105 @@ unsafe fn render_ball_widget(
         "--".to_string()
     };
 
-    let mut pct_rect = RECT {
-        left: 0,
-        top: 19,
-        right: w,
-        bottom: 34,
-    };
-    draw_text_clean(hdc, &pct_str, &mut pct_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+    if docked {
+        // Kept small so three digits still fit between the ring and the edge.
+        let font_pct_size = (11.0 * font_scale).round().clamp(10.0, 11.0) as i32;
+        let font_pct = create_clear_font(font_pct_size, true);
+        let old_font = SelectObject(hdc, font_pct);
+        SetTextColor(hdc, if !online { CLR_TEXT_MUTED } else { CLR_TEXT });
+        let mut pct_rect = RECT {
+            left: 0,
+            top: (cy - 8.0) as i32,
+            right: w - 2,
+            bottom: (cy + 8.0) as i32,
+        };
+        draw_text_clean(hdc, &pct_str, &mut pct_rect, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+        SelectObject(hdc, old_font);
+        DeleteObject(font_pct);
+    } else {
+        let font_icon_size = (11.0 * font_scale).round() as i32;
+        let font_icon = create_clear_font(font_icon_size, true);
+        let old_font = SelectObject(hdc, font_icon);
 
-    SelectObject(hdc, old_font);
-    DeleteObject(font_pct);
-    DeleteObject(font_icon);
+        let (icon_str, icon_clr) = if charging || chg_source.is_charging() {
+            ("⚡", CLR_CYAN)
+        } else {
+            let sym = match kind {
+                DeviceKind::Keyboard => "⌨",
+                DeviceKind::Mouse => "🖱",
+                DeviceKind::Headset => "🎧",
+                _ => "📱",
+            };
+            (sym, CLR_TEXT_MUTED)
+        };
+        SetTextColor(hdc, icon_clr);
+        let mut icon_rect = RECT {
+            left: 0,
+            top: (cy - 19.0) as i32,
+            right: w,
+            bottom: (cy - 6.0) as i32,
+        };
+        draw_text_clean(hdc, icon_str, &mut icon_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+        let font_pct_size = (13.0 * font_scale).round() as i32;
+        let font_pct = create_clear_font(font_pct_size, true);
+        SelectObject(hdc, font_pct);
+        SetTextColor(hdc, if !online { CLR_TEXT_MUTED } else { CLR_TEXT });
 
-    // 4. Carousel Pagination Dots at Bottom
+        let mut pct_rect = RECT {
+            left: 0,
+            top: (cy - 3.0) as i32,
+            right: w,
+            bottom: (cy + 10.0) as i32,
+        };
+        draw_text_clean(hdc, &pct_str, &mut pct_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+        SelectObject(hdc, old_font);
+        DeleteObject(font_pct);
+        DeleteObject(font_icon);
+    }
+
+    // 4. Carousel Pagination Dots: vertical column on the flat edge when docked,
+    //    horizontal row under the percentage when hovering.
     if total_devs >= 2 {
         let cur_idx = carousel_index % total_devs;
-        let spacing = 6;
-        let start_x = (w - ((total_devs as i32 - 1) * spacing)) / 2;
-        let dot_y = h - 9;
+        if docked {
+            for i in 0..total_devs.min(3) {
+                let (dot_clr, dot_r) = if i == cur_idx {
+                    (CLR_CYAN, 2)
+                } else {
+                    (CLR_TEXT_MUTED, 1)
+                };
+                draw_dot(hdc, w - 4, (cy as i32) + 11 + (i as i32) * 4, dot_r, dot_clr);
+            }
+        } else {
+            let spacing = 6;
+            let start_x = (w - ((total_devs as i32 - 1) * spacing)) / 2;
+            let dot_y = (cy as i32) + 14;
 
-        for i in 0..total_devs {
-            let dx = start_x + (i as i32) * spacing;
-            let (dot_clr, dot_r) = if i == cur_idx {
-                (CLR_CYAN, 2)
-            } else {
-                (CLR_TEXT_MUTED, 1)
-            };
-            let dot_brush = CreateSolidBrush(dot_clr);
-            let old_b = SelectObject(hdc, dot_brush);
-            let null_pen = CreatePen(PS_SOLID, 0, dot_clr);
-            let old_p = SelectObject(hdc, null_pen);
-
-            RoundRect(hdc, dx - dot_r, dot_y - dot_r, dx + dot_r + 1, dot_y + dot_r + 1, 2, 2);
-
-            SelectObject(hdc, old_p);
-            DeleteObject(null_pen);
-            SelectObject(hdc, old_b);
-            DeleteObject(dot_brush);
+            for i in 0..total_devs {
+                let (dot_clr, dot_r) = if i == cur_idx {
+                    (CLR_CYAN, 2)
+                } else {
+                    (CLR_TEXT_MUTED, 1)
+                };
+                draw_dot(hdc, start_x + (i as i32) * spacing, dot_y, dot_r, dot_clr);
+            }
         }
     }
+}
+
+unsafe fn draw_dot(hdc: HDC, x: i32, y: i32, r: i32, clr: COLORREF) {
+    let dot_brush = CreateSolidBrush(clr);
+    let old_b = SelectObject(hdc, dot_brush);
+    let null_pen = CreatePen(PS_SOLID, 0, clr);
+    let old_p = SelectObject(hdc, null_pen);
+
+    RoundRect(hdc, x - r, y - r, x + r + 1, y + r + 1, 2, 2);
+
+    SelectObject(hdc, old_p);
+    DeleteObject(null_pen);
+    SelectObject(hdc, old_b);
+    DeleteObject(dot_brush);
 }
 
 /// Render the expanded side drawer
