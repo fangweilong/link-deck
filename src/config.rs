@@ -41,6 +41,15 @@ pub enum DeviceSort {
     Updated,
 }
 
+/// 停靠形态：贴边拉手（省空间）或完整能量球。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FloatingBallStyle {
+    #[default]
+    Tab,
+    Orb,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AccentTheme {
@@ -58,6 +67,13 @@ pub struct AppConfig {
     pub enable_floating_ball: bool,
     /// Vertical position ratio (0.0 to 1.0 from top of screen)
     pub floating_ball_y_ratio: f32,
+    /// Docked floating ball opacity in percent (40-100, lower = more see-through).
+    /// The expanded drawer keeps its own readable floor regardless of this value.
+    #[serde(default = "default_ball_opacity")]
+    pub floating_ball_opacity: u8,
+    /// Docked widget shape; hover never changes it (shape-swapping on hover used to flicker)
+    #[serde(default)]
+    pub floating_ball_style: FloatingBallStyle,
     /// Polling interval in milliseconds
     pub poll_interval_ms: u64,
     /// UI Font size scale factor (1.0 = standard, 1.15 = medium, 1.3 = large)
@@ -108,6 +124,16 @@ pub struct AppConfig {
     pub auto_start: bool,
 }
 
+fn default_ball_opacity() -> u8 {
+    80
+}
+
+/// Maps the user-facing 40-100% range onto the layered-window alpha channel and
+/// clamps hand-edited config values so the widget can never become invisible.
+pub fn opacity_to_alpha(percent: u8) -> u8 {
+    let pct = percent.clamp(40, 100) as u32;
+    ((pct * 255) / 100) as u8
+}
 fn default_panel_width() -> i32 {
     640
 }
@@ -133,6 +159,8 @@ impl Default for AppConfig {
         Self {
             enable_floating_ball: true, // Default: enabled on screen edge
             floating_ball_y_ratio: 0.75, // Lower-right area above taskbar
+            floating_ball_opacity: default_ball_opacity(),
+            floating_ball_style: FloatingBallStyle::Tab,
             poll_interval_ms: 300_000,   // Default: 5 minutes (300,000 ms)
             font_scale: 1.15,            // Clear, comfortably readable font scale
             panel_width: 640,
@@ -162,6 +190,11 @@ impl AppConfig {
 
     pub fn set_ui_density(&mut self, density: UiDensity) {
         self.ui_density = density;
+    }
+
+    /// Docked ball opacity as a 0-255 layered-window alpha.
+    pub fn ball_alpha(&self) -> u8 {
+        opacity_to_alpha(self.floating_ball_opacity)
     }
 
     /// Standard user configuration directory: `%APPDATA%\LinkDeck` on Windows,
@@ -361,5 +394,21 @@ mod tests {
         assert_eq!(restored.device_sort, DeviceSort::Updated);
         assert_eq!(restored.accent_theme, AccentTheme::Blue);
         assert!(!restored.show_onboarding);
+    }
+
+    #[test]
+    fn ball_opacity_clamps_and_survives_old_configs() {
+        // Hand-edited or legacy configs must never produce an invisible widget.
+        assert_eq!(opacity_to_alpha(100), 255);
+        assert_eq!(opacity_to_alpha(80), 204);
+        assert_eq!(opacity_to_alpha(0), opacity_to_alpha(40));
+        assert_eq!(opacity_to_alpha(250), 255);
+
+        // Configs written before this field existed must fall back to the default.
+        let mut json: serde_json::Value =
+            serde_json::to_value(AppConfig::default()).unwrap();
+        json.as_object_mut().unwrap().remove("floating_ball_opacity");
+        let legacy: AppConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(legacy.floating_ball_opacity, 80);
     }
 }

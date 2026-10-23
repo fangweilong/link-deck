@@ -1,5 +1,6 @@
 #![allow(unsafe_op_in_unsafe_fn, static_mut_refs, dead_code, unused_variables)]
 
+use crate::config::FloatingBallStyle;
 use crate::devices::types::{DeviceKind, DeviceSnapshot};
 use std::mem;
 use std::ptr;
@@ -23,16 +24,34 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetClientRect, GetCursorPos, GetSystemMetrics, KillTimer,
     LoadCursorW, RegisterClassExW, SendMessageW, SetLayeredWindowAttributes, SetTimer,
-    SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, IDC_ARROW, LWA_COLORKEY, SM_CXSCREEN,
+    SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, IDC_ARROW, LWA_ALPHA, LWA_COLORKEY,
+    SM_CXSCREEN,
     SM_CYSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WM_DESTROY,
     WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_TIMER,
     WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 pub const BALL_SIZE: i32 = 48;
+/// 窗口高度取收纳态拉手的高度，悬停时的完整球体居中绘制在同一个窗口里。
+pub const DOCK_H: i32 = 64;
+/// 贴边拉手宽度：右侧贴屏幕，左侧两个角做圆角。
+const TAB_W: i32 = 26;
+const TAB_RADIUS: f32 = 9.0;
 pub const EXPANDED_HEIGHT: i32 = 205;
 const CLR_COLORKEY: COLORREF = 0x00FF00FF; // Magenta colorkey for transparent edges
 const TIMER_BALL_ANIM: usize = 1001;
+
+// The expanded drawer never drops below this alpha: its text has to stay readable
+// even when the user dials the docked gauge far down.
+const ALPHA_DRAWER_FLOOR: u8 = 232;
+
+fn layered_alpha(expanded: bool, opacity: u8) -> u8 {
+    if expanded {
+        opacity.max(ALPHA_DRAWER_FLOOR)
+    } else {
+        opacity
+    }
+}
 
 pub fn get_expanded_width(font_scale: f32) -> i32 {
     if font_scale >= 1.25 {
@@ -76,6 +95,10 @@ pub struct BallStateData {
     pub cur_y: i32,
     pub hover: bool,
     pub hover_btn: i32,
+    /// 停靠形态由用户选择，悬停不再切换形状（切换会导致鼠标反复进出窗口而闪烁）
+    pub style: FloatingBallStyle,
+    /// Layered-window alpha (0-255) chosen by the user for the docked gauge.
+    pub opacity: u8,
     pub host_hwnd: HWND,
     pub hwnd: HWND,
     pub tooltip_hwnd: HWND,
@@ -89,6 +112,8 @@ impl FloatingBallWindow {
         host_hwnd: HWND,
         initial_enabled: bool,
         font_scale: f32,
+        opacity: u8,
+        style: FloatingBallStyle,
     ) -> Result<Self, String> {
         unsafe {
             let instance = GetModuleHandleW(ptr::null());
@@ -124,6 +149,8 @@ impl FloatingBallWindow {
                 cur_y: start_y,
                 hover: false,
                 hover_btn: 0,
+                opacity,
+                style,
                 host_hwnd,
                 hwnd: ptr::null_mut(),
                 tooltip_hwnd: ptr::null_mut(),
@@ -141,7 +168,7 @@ impl FloatingBallWindow {
                 start_x,
                 start_y,
                 BALL_SIZE,
-                BALL_SIZE,
+                DOCK_H,
                 ptr::null_mut(),
                 ptr::null_mut(),
                 instance,
@@ -152,7 +179,7 @@ impl FloatingBallWindow {
                 return Err("Failed to create floating ball window".into());
             }
 
-            SetLayeredWindowAttributes(hwnd, CLR_COLORKEY, 0, LWA_COLORKEY);
+            set_ball_alpha(hwnd, layered_alpha(false, opacity));
 
             // Create Tooltip
             let tooltip_hwnd = CreateWindowExW(
@@ -236,6 +263,27 @@ impl FloatingBallWindow {
         }
     }
 
+    /// 切换停靠形态（拉手 / 完整圆球），即时重绘。
+    pub fn set_style(&self, style: FloatingBallStyle) {
+        unsafe {
+            if let Some(state_arc) = &BALL_STATE {
+                state_arc.lock().unwrap().style = style;
+            }
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(self.hwnd, ptr::null(), 0);
+        }
+    }
+
+    /// Applies a user-chosen docked opacity. The drawer keeps its readable floor.
+    pub fn set_opacity(&self, opacity: u8) {
+        unsafe {
+            if let Some(state_arc) = &BALL_STATE {
+                let mut state = state_arc.lock().unwrap();
+                state.opacity = opacity;
+                set_ball_alpha(self.hwnd, layered_alpha(state.expanded, opacity));
+            }
+        }
+    }
+
     pub fn set_enabled(&self, enabled: bool) {
         unsafe {
             let screen_w = GetSystemMetrics(SM_CXSCREEN);
@@ -252,9 +300,10 @@ impl FloatingBallWindow {
                         screen_w - BALL_SIZE,
                         cur_y,
                         BALL_SIZE,
-                        BALL_SIZE,
+                        DOCK_H,
                         SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     );
+                    set_ball_alpha(self.hwnd, layered_alpha(false, state.opacity));
                     SetTimer(self.hwnd, TIMER_BALL_ANIM, 100, None);
                     ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
                 } else {
@@ -287,6 +336,11 @@ pub fn get_carousel_devices(devices: &[DeviceSnapshot]) -> Vec<&DeviceSnapshot> 
     } else {
         devices.iter().collect()
     }
+}
+
+/// Sets color-key transparency plus a uniform opacity for the painted pixels.
+pub unsafe fn set_ball_alpha(hwnd: HWND, alpha: u8) {
+    SetLayeredWindowAttributes(hwnd, CLR_COLORKEY, alpha, LWA_COLORKEY | LWA_ALPHA);
 }
 
 pub unsafe fn update_ball_tooltip(tooltip_hwnd: HWND, target_hwnd: HWND, text: &str) {
@@ -437,7 +491,7 @@ unsafe extern "system" fn ball_wnd_proc(
             let mem_bmp = CreateCompatibleBitmap(hdc, width, height);
             let old_bmp = SelectObject(mem_dc, mem_bmp);
 
-            let (devices, expanded, font_scale, hover, hover_btn, carousel_index, pulse_phase) =
+            let (devices, expanded, font_scale, hover, hover_btn, carousel_index, pulse_phase, style) =
                 if let Some(state_arc) = &BALL_STATE {
                     let state = state_arc.lock().unwrap();
                     (
@@ -448,22 +502,28 @@ unsafe extern "system" fn ball_wnd_proc(
                         state.hover_btn,
                         state.carousel_index,
                         state.pulse_phase,
+                        state.style,
                     )
                 } else {
-                    (Vec::new(), false, 1.15, false, 0, 0, 0.0)
+                    (Vec::new(), false, 1.15, false, 0, 0, 0.0, FloatingBallStyle::Tab)
                 };
 
             if !expanded {
-                render_ball_widget(
-                    mem_dc,
-                    width,
-                    height,
-                    &devices,
-                    carousel_index,
-                    pulse_phase,
-                    font_scale,
-                    hover,
-                );
+                match style {
+                    FloatingBallStyle::Tab => render_tab_widget(
+                        mem_dc,
+                        width,
+                        height,
+                        &devices,
+                        carousel_index,
+                        pulse_phase,
+                        font_scale,
+                        hover,
+                    ),
+                    FloatingBallStyle::Orb => {
+                        render_ball_widget(mem_dc, width, height, &devices, carousel_index, pulse_phase, font_scale)
+                    }
+                }
             } else {
                 render_expanded_drawer(mem_dc, width, height, &devices, font_scale, hover_btn);
             }
@@ -497,7 +557,7 @@ unsafe extern "system" fn ball_wnd_proc(
 
                     let screen_w = GetSystemMetrics(SM_CXSCREEN);
                     let screen_h = GetSystemMetrics(SM_CYSCREEN);
-                    let clamped_y = new_y.clamp(20, screen_h - BALL_SIZE - 40);
+                    let clamped_y = new_y.clamp(20, screen_h - DOCK_H - 40);
                     state.cur_y = clamped_y;
 
                     SetWindowPos(
@@ -506,7 +566,7 @@ unsafe extern "system" fn ball_wnd_proc(
                         screen_w - BALL_SIZE,
                         clamped_y,
                         BALL_SIZE,
-                        BALL_SIZE,
+                        DOCK_H,
                         SWP_NOACTIVATE,
                     );
                 } else {
@@ -609,7 +669,7 @@ unsafe extern "system" fn ball_wnd_proc(
                         let exp_w = get_expanded_width(font_scale);
                         (exp_w, EXPANDED_HEIGHT, screen_w - exp_w)
                     } else {
-                        (BALL_SIZE, BALL_SIZE, screen_w - BALL_SIZE)
+                        (BALL_SIZE, DOCK_H, screen_w - BALL_SIZE)
                     };
 
                     SetWindowPos(
@@ -621,6 +681,7 @@ unsafe extern "system" fn ball_wnd_proc(
                         new_h,
                         SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     );
+                    set_ball_alpha(hwnd, layered_alpha(is_exp, state.opacity));
                 }
                 windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
             }
@@ -646,8 +707,35 @@ unsafe extern "system" fn ball_wnd_proc(
     }
 }
 
-/// Render the circular/pill Edge Floating Ball
-unsafe fn render_ball_widget(
+
+/// 左圆角、右侧齐平的贴边拉手：屏幕边就是它的天然收口，不会被看成“被裁掉的圆”。
+unsafe fn tab_inside(px: f32, py: f32, x0: f32, x1: f32, y0: f32, y1: f32, r: f32) -> bool {
+    if py < y0 || py > y1 || px < x0 || px > x1 {
+        return false;
+    }
+    if px >= x0 + r {
+        return true;
+    }
+    let cx = x0 + r;
+    if py < y0 + r {
+        return (px - cx).powi(2) + (py - (y0 + r)).powi(2) <= r * r;
+    }
+    if py > y1 - r {
+        return (px - cx).powi(2) + (py - (y1 - r)).powi(2) <= r * r;
+    }
+    true
+}
+
+fn blend(dst: (u8, u8, u8), src: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
+    let t = t.clamp(0.0, 1.0);
+    (
+        (dst.0 as f32 * (1.0 - t) + src.0 as f32 * t) as u8,
+        (dst.1 as f32 * (1.0 - t) + src.1 as f32 * t) as u8,
+        (dst.2 as f32 * (1.0 - t) + src.2 as f32 * t) as u8,
+    )
+}
+
+unsafe fn render_tab_widget(
     hdc: HDC,
     w: i32,
     h: i32,
@@ -677,23 +765,227 @@ unsafe fn render_ball_widget(
         (None, false, crate::devices::ChargingSource::None, false, DeviceKind::Other)
     };
 
+    let accent = if charging {
+        let pulse = 0.82 + 0.18 * pulse_phase.sin();
+        let g = (210.0 + 45.0 * pulse_phase.sin()).clamp(165.0, 255.0) as u8;
+        let b = (255.0 * pulse.clamp(0.85, 1.0)) as u8;
+        (0u8, g, b)
+    } else if let Some(p) = pct {
+        if p >= 50 {
+            (16u8, 185u8, 129u8)
+        } else if p >= 20 {
+            (245u8, 158u8, 11u8)
+        } else {
+            (239u8, 68u8, 68u8)
+        }
+    } else {
+        (80u8, 92u8, 108u8)
+    };
+
+    let bg = if hover { (0x1Eu8, 0x22u8, 0x28u8) } else { (0x16u8, 0x19u8, 0x1Eu8) };
+    let border_rgb = blend(bg, accent, if hover { 0.70 } else { 0.45 });
+    let track_rgb = (0x2Cu8, 0x32u8, 0x3Au8);
+
+    let x0 = (w - TAB_W) as f32;
+    let x1 = w as f32;
+    let y0 = 1.0f32;
+    let y1 = h as f32 - 1.0;
+
+    // 左侧独立的竖向电量条：文字永远压在深色底上，任何档位都清晰
+    let gauge_x0 = x0 + 4.0;
+    let gauge_x1 = gauge_x0 + 3.0;
+    let gauge_y0 = 7.0;
+    let gauge_y1 = h as f32 - 7.0;
+    let level_y = gauge_y1 - (gauge_y1 - gauge_y0) * (pct.unwrap_or(0).min(100) as f32 / 100.0);
+
+    let mut pixels = vec![CLR_COLORKEY; (w * h) as usize];
+    let sub = [0.2f32, 0.5f32, 0.8f32];
+    let n_sub = 9.0f32;
+
+    for y in 0..h {
+        for x in 0..w {
+            let mut inside = 0.0f32;
+            let mut edge = 0.0f32;
+            let mut gauge = 0.0f32;
+            let mut filled = 0.0f32;
+
+            for &sy in &sub {
+                for &sx in &sub {
+                    let px = x as f32 + sx;
+                    let py = y as f32 + sy;
+                    if tab_inside(px, py, x0, x1, y0, y1, TAB_RADIUS) {
+                        inside += 1.0;
+                        // 右边界贴着屏幕，不描边，避免出现“断口”
+                        if !tab_inside(
+                            px,
+                            py,
+                            x0 + 1.0,
+                            x1,
+                            y0 + 1.0,
+                            y1 - 1.0,
+                            (TAB_RADIUS - 1.0).max(0.0),
+                        ) {
+                            edge += 1.0;
+                        }
+                        if px >= gauge_x0 && px <= gauge_x1 && py >= gauge_y0 && py <= gauge_y1 {
+                            gauge += 1.0;
+                            if py >= level_y {
+                                filled += 1.0;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if inside <= 0.0 {
+                continue;
+            }
+
+            let alpha = inside / n_sub;
+            let bar = blend(track_rgb, accent, filled / gauge.max(1.0));
+            let rgb = blend(
+                blend(bg, bar, gauge / n_sub),
+                border_rgb,
+                edge / n_sub,
+            );
+            let r = (rgb.0 as f32 * alpha) as u32;
+            let g = (rgb.1 as f32 * alpha) as u32;
+            let b = (rgb.2 as f32 * alpha) as u32;
+            pixels[(y * w + x) as usize] = (r << 16) | (g << 8) | b;
+        }
+    }
+
+    let mut bmi: BITMAPINFO = mem::zeroed();
+    bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+    bmi.bmiHeader.biWidth = w;
+    bmi.bmiHeader.biHeight = -h;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB as u32;
+
+    SetDIBitsToDevice(
+        hdc,
+        0,
+        0,
+        w as u32,
+        h as u32,
+        0,
+        0,
+        0,
+        h as u32,
+        pixels.as_ptr() as _,
+        &bmi,
+        DIB_RGB_COLORS,
+    );
+
+    SetBkMode(hdc, TRANSPARENT as i32);
+
+    // 设备图标 / 电量数字 / 轮播点：与完整球体同一套内容，只是排成竖条
+    let icon_size = (11.0 * font_scale).round().clamp(10.0, 12.0) as i32;
+    let font_icon = create_clear_font(icon_size, true);
+    let old_font = SelectObject(hdc, font_icon);
+    let (icon_str, icon_clr) = if charging || chg_source.is_charging() {
+        ("⚡", CLR_CYAN)
+    } else {
+        let sym = match kind {
+            DeviceKind::Keyboard => "⌨",
+            DeviceKind::Mouse => "🖱",
+            DeviceKind::Headset => "🎧",
+            _ => "📱",
+        };
+        (sym, CLR_TEXT_MUTED)
+    };
+    SetTextColor(hdc, icon_clr);
+    let mut icon_rect = RECT {
+        left: (w - TAB_W + 9) as i32,
+        top: 6,
+        right: w,
+        bottom: 24,
+    };
+    draw_text_clean(hdc, icon_str, &mut icon_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+    let pct_size = (10.0 * font_scale).round().clamp(9.0, 10.0) as i32;
+    let font_pct = create_clear_font(pct_size, true);
+    SelectObject(hdc, font_pct);
+    SetTextColor(hdc, if online { CLR_TEXT } else { CLR_TEXT_MUTED });
+    let pct_str = if let Some(p) = pct {
+        format!("{}", p)
+    } else if online {
+        "ON".to_string()
+    } else {
+        "--".to_string()
+    };
+    SetTextColor(hdc, if online { CLR_TEXT } else { CLR_TEXT_MUTED });
+    let mut pct_rect = RECT {
+        left: (w - TAB_W + 9) as i32,
+        top: 25,
+        right: w,
+        bottom: 43,
+    };
+    draw_text_clean(hdc, &pct_str, &mut pct_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+    SelectObject(hdc, old_font);
+    DeleteObject(font_pct);
+    DeleteObject(font_icon);
+
+    if total_devs >= 2 {
+        let cur_idx = carousel_index % total_devs;
+        for i in 0..total_devs.min(3) {
+            let (dot_clr, dot_r) = if i == cur_idx {
+                (CLR_CYAN, 2)
+            } else {
+                (CLR_TEXT_MUTED, 1)
+            };
+            draw_dot(hdc, w - 5, 46 + (i as i32) * 4, dot_r, dot_clr);
+        }
+    }
+}
+
+/// Render the circular/pill Edge Floating Ball
+unsafe fn render_ball_widget(
+    hdc: HDC,
+    w: i32,
+    h: i32,
+    devices: &[DeviceSnapshot],
+    carousel_index: usize,
+    pulse_phase: f32,
+    font_scale: f32,
+) {
+    let active_list = get_carousel_devices(devices);
+    let total_devs = active_list.len();
+    let cur_dev = if total_devs > 0 {
+        active_list.get(carousel_index % total_devs).copied()
+    } else {
+        None
+    };
+
+    let (pct, charging, chg_source, online, kind) = if let Some(d) = cur_dev {
+        (
+            d.battery.percentage,
+            d.battery.charging,
+            d.battery.charging_source,
+            d.battery.online,
+            d.kind,
+        )
+    } else {
+        (None, false, crate::devices::ChargingSource::None, false, DeviceKind::Other)
+    };
+
     // 1. Prepare 32-bit DIB pixel buffer (filled with chroma-key CLR_COLORKEY for transparency)
     let mut pixels = vec![CLR_COLORKEY; (w * h) as usize];
-    let cx = (w - 1) as f32 / 2.0;
     let cy = (h - 1) as f32 / 2.0;
 
+    let cx = (w - 1) as f32 / 2.0;
     let r_ball = 22.5f32;
     let r_mid = 18.5f32;
     let r_thickness = 3.6f32;
+    let sweep_total = std::f32::consts::TAU;
+    let arc_dir = 1.0f32;
     let r_outer = r_mid + r_thickness / 2.0;
     let r_inner = r_mid - r_thickness / 2.0;
     let cap_r = r_thickness / 2.0;
 
-    let ball_bg_rgb = if hover {
-        (0x28u8, 0x2Eu8, 0x36u8)
-    } else {
-        (0x18u8, 0x1Bu8, 0x20u8)
-    };
+    let ball_bg_rgb = (0x28u8, 0x2Eu8, 0x36u8);
     let track_rgb = (0x28u8, 0x2Eu8, 0x38u8);
 
     let arc_rgb = if charging {
@@ -715,13 +1007,15 @@ unsafe fn render_ball_widget(
     };
 
     let eff_pct = pct.unwrap_or(0).min(100);
-    let sweep_rad = (eff_pct as f32 / 100.0) * (2.0 * std::f32::consts::PI);
+    let sweep_rad = (eff_pct as f32 / 100.0) * sweep_total;
 
-    let start_cap_x = cx;
-    let start_cap_y = cy - r_mid;
-    let end_angle = sweep_rad - std::f32::consts::FRAC_PI_2;
-    let end_cap_x = cx + r_mid * end_angle.cos();
-    let end_cap_y = cy + r_mid * end_angle.sin();
+    // 弧参数 0 位于 12 点，顺时针推进。
+    let arc_point = |s: f32| {
+        let a = -std::f32::consts::FRAC_PI_2 + arc_dir * s;
+        (cx + r_mid * a.cos(), cy + r_mid * a.sin())
+    };
+    let (start_cap_x, start_cap_y) = arc_point(0.0);
+    let (end_cap_x, end_cap_y) = arc_point(sweep_rad);
 
     // 3x3 subpixel sampling grid for smooth anti-aliased borders and arcs
     let sub = [0.2f32, 0.5f32, 0.8f32];
@@ -827,7 +1121,15 @@ unsafe fn render_ball_widget(
 
     SetBkMode(hdc, TRANSPARENT as i32);
 
-    // 3. Center Content (Top Icon / ⚡, Bottom Battery Percentage)
+    // 3. Center Content: 设备图标 / 电量数字 / 轮播点
+    let pct_str = if let Some(p) = pct {
+        format!("{}", p)
+    } else if online {
+        "ON".to_string()
+    } else {
+        "--".to_string()
+    };
+
     let font_icon_size = (11.0 * font_scale).round() as i32;
     let font_icon = create_clear_font(font_icon_size, true);
     let old_font = SelectObject(hdc, font_icon);
@@ -846,9 +1148,9 @@ unsafe fn render_ball_widget(
     SetTextColor(hdc, icon_clr);
     let mut icon_rect = RECT {
         left: 0,
-        top: 6,
+        top: (cy - 19.0) as i32,
         right: w,
-        bottom: 20,
+        bottom: (cy - 6.0) as i32,
     };
     draw_text_clean(hdc, icon_str, &mut icon_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
     let font_pct_size = (13.0 * font_scale).round() as i32;
@@ -856,53 +1158,48 @@ unsafe fn render_ball_widget(
     SelectObject(hdc, font_pct);
     SetTextColor(hdc, if !online { CLR_TEXT_MUTED } else { CLR_TEXT });
 
-    let pct_str = if let Some(p) = pct {
-        format!("{}", p)
-    } else if online {
-        "ON".to_string()
-    } else {
-        "--".to_string()
-    };
-
     let mut pct_rect = RECT {
         left: 0,
-        top: 19,
+        top: (cy - 3.0) as i32,
         right: w,
-        bottom: 34,
+        bottom: (cy + 10.0) as i32,
     };
     draw_text_clean(hdc, &pct_str, &mut pct_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
     SelectObject(hdc, old_font);
     DeleteObject(font_pct);
     DeleteObject(font_icon);
-
-    // 4. Carousel Pagination Dots at Bottom
+    // 4. Carousel Pagination Dots: vertical column on the flat edge when docked,
+    //    horizontal row under the percentage when hovering.
     if total_devs >= 2 {
         let cur_idx = carousel_index % total_devs;
         let spacing = 6;
         let start_x = (w - ((total_devs as i32 - 1) * spacing)) / 2;
-        let dot_y = h - 9;
+        let dot_y = (cy as i32) + 14;
 
         for i in 0..total_devs {
-            let dx = start_x + (i as i32) * spacing;
             let (dot_clr, dot_r) = if i == cur_idx {
                 (CLR_CYAN, 2)
             } else {
                 (CLR_TEXT_MUTED, 1)
             };
-            let dot_brush = CreateSolidBrush(dot_clr);
-            let old_b = SelectObject(hdc, dot_brush);
-            let null_pen = CreatePen(PS_SOLID, 0, dot_clr);
-            let old_p = SelectObject(hdc, null_pen);
-
-            RoundRect(hdc, dx - dot_r, dot_y - dot_r, dx + dot_r + 1, dot_y + dot_r + 1, 2, 2);
-
-            SelectObject(hdc, old_p);
-            DeleteObject(null_pen);
-            SelectObject(hdc, old_b);
-            DeleteObject(dot_brush);
+            draw_dot(hdc, start_x + (i as i32) * spacing, dot_y, dot_r, dot_clr);
         }
     }
+}
+
+unsafe fn draw_dot(hdc: HDC, x: i32, y: i32, r: i32, clr: COLORREF) {
+    let dot_brush = CreateSolidBrush(clr);
+    let old_b = SelectObject(hdc, dot_brush);
+    let null_pen = CreatePen(PS_SOLID, 0, clr);
+    let old_p = SelectObject(hdc, null_pen);
+
+    RoundRect(hdc, x - r, y - r, x + r + 1, y + r + 1, 2, 2);
+
+    SelectObject(hdc, old_p);
+    DeleteObject(null_pen);
+    SelectObject(hdc, old_b);
+    DeleteObject(dot_brush);
 }
 
 /// Render the expanded side drawer
@@ -1178,5 +1475,57 @@ mod tests {
         // Fallback to all when none active
         assert_eq!(carousel.len(), 1);
         assert_eq!(carousel[0].id, "mouse");
+    }
+
+
+
+    /// 渲染到离屏 DIB 并返回像素，用于形状级断言。
+    #[cfg(test)]
+    fn render_to_pixels(hover: bool, style: FloatingBallStyle) -> Vec<u32> {
+        use windows_sys::Win32::Graphics::Gdi::{
+            CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO,
+            BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+        };
+        unsafe {
+            let (w, h) = (BALL_SIZE, DOCK_H);
+            let mut bmi: BITMAPINFO = mem::zeroed();
+            bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+            bmi.bmiHeader.biWidth = w;
+            bmi.bmiHeader.biHeight = -h;
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB as u32;
+            let mut bits: *mut core::ffi::c_void = ptr::null_mut();
+            let bmp = CreateDIBSection(ptr::null_mut(), &bmi, DIB_RGB_COLORS as u32, &mut bits, ptr::null_mut(), 0);
+            let dc = CreateCompatibleDC(ptr::null_mut());
+            let old = SelectObject(dc, bmp);
+            SetBkMode(dc, TRANSPARENT as i32);
+            let dev = create_test_dev("kbd", "RK108", DeviceKind::Keyboard, Some(72), false, true);
+            let dev2 = create_test_dev("mouse", "X2", DeviceKind::Mouse, Some(45), false, true);
+            let list = [dev, dev2];
+            match style {
+                FloatingBallStyle::Tab => render_tab_widget(dc, w, h, &list, 0, 0.0, 1.15, hover),
+                FloatingBallStyle::Orb => {
+                    render_ball_widget(dc, w, h, &list, 0, 0.0, 1.15);
+                }
+            }
+            let px = std::slice::from_raw_parts(bits as *const u32, (w * h) as usize).to_vec();
+            SelectObject(dc, old);
+            DeleteObject(bmp);
+            DeleteDC(dc);
+            px
+        }
+    }
+
+    #[test]
+    fn hover_never_changes_the_painted_footprint() {
+        // 悬停只允许改配色：一旦形状变化，处于两个形状差集里的光标会反复进出窗口 → 闪烁。
+        for style in [FloatingBallStyle::Tab, FloatingBallStyle::Orb] {
+            let calm = render_to_pixels(false, style);
+            let hovered = render_to_pixels(true, style);
+            let mask = |px: &[u32]| -> Vec<bool> { px.iter().map(|p| *p != CLR_COLORKEY).collect() };
+            assert_eq!(mask(&calm), mask(&hovered), "hover changed the painted shape of {style:?}");
+            assert!(calm.iter().any(|p| *p != CLR_COLORKEY), "widget painted nothing");
+        }
     }
 }
