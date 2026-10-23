@@ -411,6 +411,35 @@ unsafe fn device_max_scroll(hwnd: HWND, state: &PanelStateData) -> i32 {
 }
 
 /// Settings content is a fixed-height flow; viewport excludes header and footer.
+/// 自绘滚动条：轨道 + 滑块，设备页与设置页共用同一套几何。
+unsafe fn draw_scroll_thumb(
+    hdc: HDC,
+    width: i32,
+    top: i32,
+    bottom: i32,
+    content_h: i32,
+    scroll_y: i32,
+) {
+    let viewport_h = (bottom - top).max(1);
+    if content_h <= viewport_h {
+        return;
+    }
+    let track_x = width - 10;
+    let track_brush = CreateSolidBrush(CLR_CARD_BORDER);
+    let track = RECT { left: track_x, top, right: track_x + 4, bottom };
+    FillRect(hdc, &track, track_brush);
+    DeleteObject(track_brush);
+
+    let thumb_h = ((viewport_h * viewport_h) / content_h).max(24);
+    let max_thumb_y = viewport_h - thumb_h;
+    let max_scroll = (content_h - viewport_h).max(1);
+    let thumb_y = top + ((scroll_y * max_thumb_y) / max_scroll);
+    let thumb_brush = CreateSolidBrush(CLR_ACCENT);
+    let thumb = RECT { left: track_x - 1, top: thumb_y, right: track_x + 5, bottom: thumb_y + thumb_h };
+    FillRect(hdc, &thumb, thumb_brush);
+    DeleteObject(thumb_brush);
+}
+
 unsafe fn settings_max_scroll(hwnd: HWND, state: &PanelStateData) -> i32 {
     let mut client: RECT = mem::zeroed();
     GetClientRect(hwnd, &mut client);
@@ -702,22 +731,7 @@ unsafe extern "system" fn panel_wnd_proc(
                     }
                 }
                 let content_h = (devices.len() as i32 * card_step).max(1);
-                let viewport_h = (height - 132).max(1);
-                if content_h > viewport_h {
-                    let track_x = width - 10;
-                    let track_brush = CreateSolidBrush(CLR_CARD_BORDER);
-                    let track = RECT { left: track_x, top: 70, right: track_x + 4, bottom: height - 60 };
-                    FillRect(mem_dc, &track, track_brush);
-                    DeleteObject(track_brush);
-                    let thumb_h = ((viewport_h * viewport_h) / content_h).max(24);
-                    let max_thumb_y = viewport_h - thumb_h;
-                    let max_scroll = (content_h - viewport_h).max(1);
-                    let thumb_y = 70 + ((scroll_y * max_thumb_y) / max_scroll);
-                    let thumb_brush = CreateSolidBrush(CLR_ACCENT);
-                    let thumb = RECT { left: track_x - 1, top: thumb_y, right: track_x + 5, bottom: thumb_y + thumb_h };
-                    FillRect(mem_dc, &thumb, thumb_brush);
-                    DeleteObject(thumb_brush);
-                }
+                draw_scroll_thumb(mem_dc, width, 70, height - 60, content_h, scroll_y);
                 SelectClipRgn(mem_dc, ptr::null_mut());
                 DeleteObject(content_clip);
 
@@ -791,6 +805,14 @@ unsafe extern "system" fn panel_wnd_proc(
                 settings::paint_cards(mem_dc, &page, &ctx, settings_scroll_y, hover_btn, settings::CONTENT_TOP);
                 SelectClipRgn(mem_dc, ptr::null_mut());
                 DeleteObject(settings_clip);
+                draw_scroll_thumb(
+                    mem_dc,
+                    width,
+                    settings::CONTENT_TOP,
+                    height - 62,
+                    page.content_h,
+                    settings_scroll_y,
+                );
                 // Footer "返回" button is outside the scroll clip — always visible.
                 render_action_btn(mem_dc, 20, height - 48, 150, 34, "◀ 返回设备监控", hover_btn == 90, font_scale);
             }
@@ -1590,6 +1612,7 @@ mod tests {
     fn test_rename_message_constant() {
         assert_eq!(WM_DEVICE_RENAME, 0x8000 + 101);
     }
+
 
 
 }
