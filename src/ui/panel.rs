@@ -3,6 +3,7 @@
 use crate::devices::types::{ConnectionMode, DeviceSnapshot};
 use crate::ui::clipboard::copy_text_to_clipboard;
 use crate::ui::panel_render::{render_action_btn, render_choice_pill, render_device_card};
+use crate::ui::settings;
 use std::mem;
 use std::ptr;
 use std::sync::{Arc, Mutex};
@@ -15,7 +16,7 @@ use windows_sys::Win32::Graphics::Gdi::{
     HFONT, PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, ReleaseCapture, SetCapture, SetFocus};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
@@ -24,7 +25,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, CS_HREDRAW, CS_VREDRAW, ES_AUTOHSCROLL, ICON_BIG, ICON_SMALL, IDC_ARROW,
     IsIconic, MINMAXINFO, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_RESTORE, SW_SHOW,
     WM_CLOSE, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO,
-    WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETFONT, WM_SETICON,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETFONT,
+    WM_SETICON,
     WM_SIZE, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
     WS_POPUP, WS_SYSMENU, WS_VISIBLE, SW_SHOWNORMAL,
     SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
@@ -35,7 +37,6 @@ pub const MIN_PANEL_HEIGHT: i32 = 400;
 pub const PANEL_WIDTH: i32 = 640;
 pub const PANEL_HEIGHT: i32 = 680;
 /// Logical height of the settings flow (last pill bottom + bottom padding).
-pub const SETTINGS_CONTENT_HEIGHT: i32 = 980;
 
 // Custom messages exchanged with the hidden host window.
 pub const WM_SAVE_PANEL_SIZE: u32 = 0x8000 + 105;
@@ -47,6 +48,8 @@ pub const WM_SAVE_UPDATE_PREFS: u32 = 0x8000 + 110;
 pub const WM_SAVE_AUTOSTART: u32 = 0x8000 + 111;
 /// wParam carries the docked ball opacity in percent (40-100).
 pub const WM_SET_BALL_OPACITY: u32 = 0x8000 + 112;
+/// 拖拽结束才落盘，避免拖拽过程中逐像素写文件。
+pub const WM_SAVE_BALL_OPACITY: u32 = 0x8000 + 113;
 pub const WM_DEVICE_RENAME: u32 = 0x8000 + 101;
 pub const WM_SAVE_TOAST_SETTINGS: u32 = 0x8000 + 104;
 
@@ -83,6 +86,7 @@ pub struct PanelStateData {
     pub ui_density: crate::config::UiDensity,
     pub scroll_y: i32,
     pub settings_scroll_y: i32,
+    pub slider_drag: bool,
     pub refresh_status: String,
     pub next_refresh_seconds: u64,
     pub device_filter: crate::config::DeviceFilter,
@@ -141,6 +145,7 @@ impl PanelWindow {
                 ui_density: config.ui_density,
                 scroll_y: 0,
                 settings_scroll_y: 0,
+                slider_drag: false,
                 refresh_status: "就绪 · 可立即刷新".to_string(),
                 next_refresh_seconds: config.poll_interval_ms / 1000,
                 device_filter: config.device_filter,
@@ -344,16 +349,27 @@ unsafe fn set_panel_density(hwnd: HWND, host: HWND, density: crate::config::UiDe
     windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
 }
 
-unsafe fn set_ball_opacity(hwnd: HWND, host: HWND, percent: u8) {
+/// 按鼠标横坐标更新透明度：面板立即重绘，主程序同步应用到悬浮球（不落盘）。
+unsafe fn update_ball_opacity_from_x(hwnd: HWND, x: i32) {
+    let mut rect: RECT = mem::zeroed();
+    GetClientRect(hwnd, &mut rect);
+    let width = rect.right - rect.left;
     if let Some(state_arc) = &PANEL_STATE {
-        let mut state = state_arc.lock().unwrap();
-        state.ball_opacity = percent;
+        let (pct, host, changed) = {
+            let mut st = state_arc.lock().unwrap();
+            let page = settings::layout(&settings_ctx(&st), width);
+            let pct = settings::slider_value(&page.slider, x);
+            let changed = pct != st.ball_opacity;
+            st.ball_opacity = pct;
+            (pct, st.host_hwnd, changed)
+        };
+        if changed && !host.is_null() {
+            PostMessageW(host, WM_SET_BALL_OPACITY, pct as WPARAM, 0);
+        }
+        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
     }
-    if !host.is_null() {
-        PostMessageW(host, WM_SET_BALL_OPACITY, percent as WPARAM, 0);
-    }
-    windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
 }
+
 
 fn prepare_devices(
     mut devices: Vec<DeviceSnapshot>,
@@ -395,11 +411,13 @@ unsafe fn device_max_scroll(hwnd: HWND, state: &PanelStateData) -> i32 {
 }
 
 /// Settings content is a fixed-height flow; viewport excludes header and footer.
-unsafe fn settings_max_scroll(hwnd: HWND) -> i32 {
+unsafe fn settings_max_scroll(hwnd: HWND, state: &PanelStateData) -> i32 {
     let mut client: RECT = mem::zeroed();
     GetClientRect(hwnd, &mut client);
-    let viewport = (client.bottom - client.top - 132).max(1);
-    (SETTINGS_CONTENT_HEIGHT - viewport).max(0)
+    let width = client.right - client.left;
+    let viewport = (client.bottom - client.top - 62 - settings::CONTENT_TOP).max(1);
+    let content = settings::layout(&settings_ctx(state), width).content_h;
+    (content - viewport).max(0)
 }
 
 unsafe fn set_dashboard_preferences(hwnd: HWND, host: HWND, filter: crate::config::DeviceFilter, sort: crate::config::DeviceSort) {
@@ -494,7 +512,7 @@ unsafe extern "system" fn panel_wnd_proc(
                 let max_scroll = if on_devices {
                     device_max_scroll(hwnd, &state)
                 } else {
-                    settings_max_scroll(hwnd)
+                    settings_max_scroll(hwnd, &state)
                 };
                 let mut pos = if on_devices { state.scroll_y } else { state.settings_scroll_y };
                 match code {
@@ -540,7 +558,7 @@ unsafe extern "system" fn panel_wnd_proc(
                     let max_scroll = device_max_scroll(hwnd, &state);
                     state.scroll_y = (state.scroll_y - delta / 3).clamp(0, max_scroll);
                 } else {
-                    let max_scroll = settings_max_scroll(hwnd);
+                    let max_scroll = settings_max_scroll(hwnd, &state);
                     state.settings_scroll_y = (state.settings_scroll_y - delta / 3).clamp(0, max_scroll);
                 }
             }
@@ -756,16 +774,21 @@ unsafe extern "system" fn panel_wnd_proc(
                 let mut status_rect = RECT { left: 340, top: height - 42, right: width - 160, bottom: height - 18 };
                 draw_text_clean(mem_dc, &refresh_status, &mut status_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
             } else {
-                // Clip to scrollable area; render_settings_view applies -scroll_y to every coord directly.
-                let settings_clip = CreateRectRgn(0, 66, width, (height - 62).max(67));
-                SelectClipRgn(mem_dc, settings_clip);
-                render_settings_view(
-                    mem_dc, width, height, font_scale, poll_ms, ball_on, ball_opacity,
-                    enable_toast, toast_info, toast_warn, toast_crit, toast_gaming,
-                    toast_sound,
-                    ui_density, device_filter, device_sort, accent_theme, settings_scroll_y, hover_btn,
-                    auto_update, auto_start,
+                let ctx = PANEL_STATE
+                    .as_ref()
+                    .map(|sa| settings_ctx(&sa.lock().unwrap()))
+                    .unwrap_or_else(fallback_settings_ctx);
+                let page = settings::layout(&ctx, width);
+                settings::paint_nav(mem_dc, &page, settings_scroll_y, hover_btn, font_scale);
+                // Cards scroll under a fixed clip; the nav strip above stays put.
+                let settings_clip = CreateRectRgn(
+                    0,
+                    settings::CONTENT_TOP,
+                    width,
+                    (height - 62).max(settings::CONTENT_TOP + 1),
                 );
+                SelectClipRgn(mem_dc, settings_clip);
+                settings::paint_cards(mem_dc, &page, &ctx, settings_scroll_y, hover_btn, settings::CONTENT_TOP);
                 SelectClipRgn(mem_dc, ptr::null_mut());
                 DeleteObject(settings_clip);
                 // Footer "返回" button is outside the scroll clip — always visible.
@@ -804,6 +827,15 @@ unsafe extern "system" fn panel_wnd_proc(
             GetClientRect(hwnd, &mut rect);
             let width = rect.right - rect.left;
             let height = rect.bottom - rect.top;
+
+            let dragging_slider = PANEL_STATE
+                .as_ref()
+                .map(|sa| sa.lock().unwrap().slider_drag)
+                .unwrap_or(false);
+            if dragging_slider {
+                update_ball_opacity_from_x(hwnd, x);
+                return 0;
+            }
 
             let active_tab = if let Some(state_arc) = &PANEL_STATE {
                 state_arc.lock().unwrap().active_tab
@@ -854,56 +886,18 @@ unsafe extern "system" fn panel_wnd_proc(
                     }
                 }
             } else {
-                // Settings hover coordinates are translated by the scroll offset.
-                let scroll_y = PANEL_STATE.as_ref().and_then(|state| state.lock().ok().map(|s| s.settings_scroll_y)).unwrap_or(0);
-                let content_y = y + scroll_y;
-                if content_y >= 115 && content_y <= 146 {
-                    if x >= 20 && x <= 92 { new_hover = 30; }
-                    else if x >= 98 && x <= 170 { new_hover = 31; }
-                    else if x >= 176 && x <= 254 { new_hover = 32; }
-                    else if x >= 260 && x <= 338 { new_hover = 33; }
-                    else if x >= 344 && x <= 422 { new_hover = 34; }
-                    else if x >= 428 && x <= 506 { new_hover = 35; }
-                } else if content_y >= 195 && content_y <= 226 {
-                    if x >= 20 && x <= 112 { new_hover = 40; }
-                    else if x >= 120 && x <= 212 { new_hover = 41; }
-                    else if x >= 220 && x <= 312 { new_hover = 42; }
-                } else if content_y >= 275 && content_y <= 308 && x >= 20 && x <= 200 { new_hover = 50; }
-                else if content_y >= 356 && content_y <= 388 {
-                    if x >= 20 && x <= 180 { new_hover = 60; }
-                    else if x >= 190 && x <= 380 { new_hover = 61; }
-                    else if x >= 390 && x <= 600 { new_hover = 62; }
-                } else if content_y >= 392 && content_y <= 424 {
-                    if x >= 20 && x <= 125 { new_hover = 70; }
-                    else if x >= 135 && x <= 240 { new_hover = 71; }
-                    else if x >= 250 && x <= 355 { new_hover = 72; }
-                    else if x >= 365 && x <= 505 { new_hover = 80; }
-                    else if x >= 515 && x <= 600 { new_hover = 81; }
-                } else if content_y >= 478 && content_y <= 504 {
-                    if x >= 20 && x <= 110 { new_hover = 100; }
-                    else if x >= 118 && x <= 208 { new_hover = 101; }
-                    else if x >= 216 && x <= 306 { new_hover = 102; }
-                } else if content_y >= 550 && content_y <= 576 {
-                    if x >= 20 && x <= 92 { new_hover = 120; }
-                    else if x >= 98 && x <= 182 { new_hover = 121; }
-                    else if x >= 188 && x <= 272 { new_hover = 122; }
-                    else if x >= 278 && x <= 350 { new_hover = 123; }
-                    else if x >= 356 && x <= 428 { new_hover = 124; }
-                    else if x >= 434 && x <= 516 { new_hover = 125; }
-                } else if content_y >= 622 && content_y <= 648 {
-                    if x >= 20 && x <= 110 { new_hover = 130; }
-                    else if x >= 118 && x <= 208 { new_hover = 131; }
-                    else if x >= 216 && x <= 306 { new_hover = 132; }
-                    else if x >= 314 && x <= 404 { new_hover = 133; }
-                } else if content_y >= 728 && content_y <= 754 {
-                    if x >= 20 && x <= 210 { new_hover = 140; }
-                    else if x >= 218 && x <= 314 { new_hover = 141; }
-                    else if x >= 322 && x <= 536 && crate::update::has_update() { new_hover = 142; }
-                } else if content_y >= 812 && content_y <= 840 && x >= 20 && x <= 220 {
-                    new_hover = 150;
-                } else if content_y >= 894 && content_y <= 922 && x >= 20 && x <= 200 {
-                    new_hover = 151;
-                } else if y >= height - 48 && y <= height - 14 && x >= 20 && x <= 180 { new_hover = 90; }
+                // 设置页：导航条固定，卡片内容随滚动偏移。
+                let (scroll_y, ctx) = PANEL_STATE.as_ref()
+                    .map(|sa| { let st = sa.lock().unwrap(); (st.settings_scroll_y, settings_ctx(&st)) })
+                    .unwrap_or((0, fallback_settings_ctx()));
+                let page = settings::layout(&ctx, width);
+                if let Some(group) = settings::nav_hit(&page, x, y) {
+                    new_hover = 160 + group as i32;
+                } else if let Some(id) = settings::hit_test(&page, x, y - settings::CONTENT_TOP + scroll_y) {
+                    new_hover = id;
+                } else if y >= height - 48 && y <= height - 14 && x >= 20 && x <= 180 {
+                    new_hover = 90;
+                }
             }
 
             if let Some(state_arc) = &PANEL_STATE {
@@ -915,9 +909,55 @@ unsafe extern "system" fn panel_wnd_proc(
             }
             0
         }
+        WM_LBUTTONDOWN => {
+            let x = (lparam & 0xFFFF) as i32;
+            let y = ((lparam >> 16) & 0xFFFF) as i32;
+
+            let mut rect: RECT = mem::zeroed();
+            GetClientRect(hwnd, &mut rect);
+            let width = rect.right - rect.left;
+
+            let on_slider = PANEL_STATE.as_ref().is_some_and(|sa| {
+                let st = sa.lock().unwrap();
+                if st.active_tab != 1 {
+                    return false;
+                }
+                let page = settings::layout(&settings_ctx(&st), width);
+                settings::hit_test(&page, x, y - settings::CONTENT_TOP + st.settings_scroll_y) == Some(settings::SLIDER_ID)
+            });
+            if on_slider {
+                SetCapture(hwnd);
+                if let Some(sa) = &PANEL_STATE {
+                    sa.lock().unwrap().slider_drag = true;
+                }
+                update_ball_opacity_from_x(hwnd, x);
+                return 0;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_LBUTTONUP => {
             let x = (lparam & 0xFFFF) as i32;
             let y = ((lparam >> 16) & 0xFFFF) as i32;
+
+            let slider_released = PANEL_STATE
+                .as_ref()
+                .map(|sa| {
+                    let mut st = sa.lock().unwrap();
+                    let was = st.slider_drag;
+                    st.slider_drag = false;
+                    was
+                })
+                .unwrap_or(false);
+            if slider_released {
+                ReleaseCapture();
+                if let Some(sa) = &PANEL_STATE {
+                    let host = sa.lock().unwrap().host_hwnd;
+                    if !host.is_null() {
+                        PostMessageW(host, WM_SAVE_BALL_OPACITY, 0, 0);
+                    }
+                }
+                return 0;
+            }
 
             let mut rect: RECT = mem::zeroed();
             GetClientRect(hwnd, &mut rect);
@@ -1021,203 +1061,22 @@ unsafe extern "system" fn panel_wnd_proc(
                     }
                 }
             } else {
-                // Settings View Actions
-                // All content y-coords rendered with -scroll_y; reverse here for hit-test.
-                let scroll_y_hit = if let Some(sa) = &PANEL_STATE { sa.lock().unwrap().settings_scroll_y } else { 0 };
-                let ey = y + scroll_y_hit;
-                if ey >= 115 && ey <= 146 {
-                    let cmd = if x >= 20 && x <= 92 {
-                        crate::ui::tray::IDM_POLL_30S
-                    } else if x >= 98 && x <= 170 {
-                        crate::ui::tray::IDM_POLL_1M
-                    } else if x >= 176 && x <= 254 {
-                        crate::ui::tray::IDM_POLL_5M
-                    } else if x >= 260 && x <= 338 {
-                        crate::ui::tray::IDM_POLL_15M
-                    } else if x >= 344 && x <= 422 {
-                        crate::ui::tray::IDM_POLL_30M
-                    } else if x >= 428 && x <= 506 {
-                        crate::ui::tray::IDM_POLL_60M
-                    } else {
-                        0
-                    };
-                    if cmd > 0 && !host.is_null() {
-                        PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, cmd as _, 0);
+                // 设置页：导航条跳转 + 卡片内控件派发。
+                let (scroll_y, ctx) = PANEL_STATE.as_ref()
+                    .map(|sa| { let st = sa.lock().unwrap(); (st.settings_scroll_y, settings_ctx(&st)) })
+                    .unwrap_or((0, fallback_settings_ctx()));
+                let page = settings::layout(&ctx, width);
+                if let Some(group) = settings::nav_hit(&page, x, y) {
+                    let max_scroll = PANEL_STATE.as_ref()
+                        .map(|sa| { let st = sa.lock().unwrap(); settings_max_scroll(hwnd, &st) })
+                        .unwrap_or(0);
+                    let target = page.group_tops.get(group).copied().unwrap_or(0) - 8;
+                    if let Some(sa) = &PANEL_STATE {
+                        sa.lock().unwrap().settings_scroll_y = target.clamp(0, max_scroll);
                     }
-                } else if ey >= 195 && ey <= 226 {
-                    let cmd = if x >= 20 && x <= 112 {
-                        crate::ui::tray::IDM_FONT_SCALE_100
-                    } else if x >= 120 && x <= 212 {
-                        crate::ui::tray::IDM_FONT_SCALE_115
-                    } else if x >= 220 && x <= 312 {
-                        crate::ui::tray::IDM_FONT_SCALE_130
-                    } else {
-                        0
-                    };
-                    if cmd > 0 && !host.is_null() {
-                        PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, cmd as _, 0);
-                    }
-                } else if ey >= 275 && ey <= 308 {
-                    if x >= 20 && x <= 200 && !host.is_null() {
-                        PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, crate::ui::tray::IDM_TOGGLE_BALL as _, 0);
-                    }
-                } else if ey >= 328 && ey <= 362 {
-                    let pct = if x >= 20 && x <= 90 { Some(100u8) }
-                        else if x >= 96 && x <= 166 { Some(90) }
-                        else if x >= 172 && x <= 242 { Some(80) }
-                        else if x >= 248 && x <= 318 { Some(70) }
-                        else if x >= 324 && x <= 394 { Some(60) }
-                        else { None };
-                    if let Some(pct) = pct {
-                        set_ball_opacity(hwnd, host, pct);
-                    }
-                } else if ey >= 404 && ey <= 436 {
-                    if x >= 20 && x <= 180 {
-                        if let Some(state_arc) = &PANEL_STATE {
-                            let mut s = state_arc.lock().unwrap();
-                            s.enable_toast = !s.enable_toast;
-                        }
-                        if !host.is_null() {
-                            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
-                        }
-                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
-                    } else if x >= 190 && x <= 380 {
-                        if let Some(state_arc) = &PANEL_STATE {
-                            let mut s = state_arc.lock().unwrap();
-                            s.toast_gaming_suppression = !s.toast_gaming_suppression;
-                        }
-                        if !host.is_null() {
-                            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
-                        }
-                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
-                    } else if x >= 390 && x <= 600 {
-                        if let Some(state_arc) = &PANEL_STATE {
-                            let mut s = state_arc.lock().unwrap();
-                            s.enable_low_battery_sound = !s.enable_low_battery_sound;
-                        }
-                        if !host.is_null() {
-                            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
-                        }
-                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
-                    }
-                } else if ey >= 440 && ey <= 472 {
-                    if x >= 20 && x <= 125 {
-                        if let Some(state_arc) = &PANEL_STATE {
-                            let mut s = state_arc.lock().unwrap();
-                            s.toast_info = match s.toast_info {
-                                40 => 50,
-                                50 => 60,
-                                _ => 40,
-                            };
-                        }
-                        if !host.is_null() {
-                            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
-                        }
-                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
-                    } else if x >= 135 && x <= 240 {
-                        if let Some(state_arc) = &PANEL_STATE {
-                            let mut s = state_arc.lock().unwrap();
-                            s.toast_warning = match s.toast_warning {
-                                20 => 30,
-                                30 => 35,
-                                _ => 20,
-                            };
-                        }
-                        if !host.is_null() {
-                            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
-                        }
-                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
-                    } else if x >= 250 && x <= 355 {
-                        if let Some(state_arc) = &PANEL_STATE {
-                            let mut s = state_arc.lock().unwrap();
-                            s.toast_critical = match s.toast_critical {
-                                5 => 10,
-                                10 => 15,
-                                _ => 5,
-                            };
-                        }
-                        if !host.is_null() {
-                            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
-                        }
-                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
-                    } else if x >= 365 && x <= 505 {
-                        crate::ui::toast::ToastNotification::show(
-                            "罗技 M720 Triathlon",
-                            "电量已降至 28% (警告通知测试)",
-                            crate::ui::toast::ToastLevel::Warning,
-                            28,
-                        );
-                    } else if x >= 515 && x <= 600 {
-                        crate::sound::play_low_battery_alarm();
-                    }
-                } else if ey >= 522 && ey <= 552 {
-                    let density = if x >= 20 && x <= 110 { Some(crate::config::UiDensity::Compact) }
-                        else if x >= 118 && x <= 208 { Some(crate::config::UiDensity::Standard) }
-                        else if x >= 216 && x <= 306 { Some(crate::config::UiDensity::Spacious) }
-                        else { None };
-                    if let Some(density) = density { set_panel_density(hwnd, host, density); }
-                } else if ey >= 594 && ey <= 624 {
-                    let filter = if x >= 20 && x <= 92 { Some(crate::config::DeviceFilter::All) }
-                        else if x >= 98 && x <= 182 { Some(crate::config::DeviceFilter::LowBattery) }
-                        else if x >= 188 && x <= 272 { Some(crate::config::DeviceFilter::Charging) }
-                        else if x >= 278 && x <= 350 { Some(crate::config::DeviceFilter::Bluetooth) }
-                        else if x >= 356 && x <= 428 { Some(crate::config::DeviceFilter::Wireless) }
-                        else { None };
-                    if let Some(filter) = filter {
-                        let sort = PANEL_STATE.as_ref().and_then(|state| state.lock().ok().map(|s| s.device_sort)).unwrap_or(crate::config::DeviceSort::Priority);
-                        set_dashboard_preferences(hwnd, host, filter, sort);
-                    }
-                } else if ey >= 630 && ey <= 660 {
-                    let sort = if x >= 20 && x <= 102 { Some(crate::config::DeviceSort::Priority) }
-                        else if x >= 110 && x <= 192 { Some(crate::config::DeviceSort::Name) }
-                        else if x >= 200 && x <= 282 { Some(crate::config::DeviceSort::Battery) }
-                        else if x >= 290 && x <= 372 { Some(crate::config::DeviceSort::Updated) }
-                        else { None };
-                    if let Some(sort) = sort {
-                        let filter = PANEL_STATE.as_ref().and_then(|state| state.lock().ok().map(|s| s.device_filter)).unwrap_or(crate::config::DeviceFilter::All);
-                        set_dashboard_preferences(hwnd, host, filter, sort);
-                    }
-                } else if ey >= 684 && ey <= 714 {
-                    let theme = if x >= 20 && x <= 110 { Some(crate::config::AccentTheme::Orange) }
-                        else if x >= 118 && x <= 208 { Some(crate::config::AccentTheme::Blue) }
-                        else if x >= 216 && x <= 306 { Some(crate::config::AccentTheme::Purple) }
-                        else if x >= 314 && x <= 404 { Some(crate::config::AccentTheme::Green) }
-                        else { None };
-                    if let Some(theme) = theme { set_accent_theme(hwnd, host, theme); }
-                } else if ey >= 776 && ey <= 802 {
-                    if x >= 20 && x <= 210 {
-                        if let Some(state_arc) = &PANEL_STATE {
-                            let mut st = state_arc.lock().unwrap();
-                            st.auto_update = !st.auto_update;
-                        }
-                        if !host.is_null() {
-                            PostMessageW(host, WM_SAVE_UPDATE_PREFS, 0, 0);
-                        }
-                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
-                    } else if x >= 218 && x <= 314 {
-                        if !host.is_null() {
-                            PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, crate::ui::tray::IDM_CHECK_UPDATE as _, 0);
-                        }
-                    } else if x >= 322 && x <= 536 && crate::update::has_update() {
-                        if !host.is_null() {
-                            PostMessageW(host, windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND, crate::ui::tray::IDM_APPLY_UPDATE as _, 0);
-                        }
-                    }
-                } else if ey >= 860 && ey <= 888 {
-                    if x >= 20 && x <= 220 {
-                        if let Some(state_arc) = &PANEL_STATE {
-                            let mut s = state_arc.lock().unwrap();
-                            s.auto_start = !s.auto_start;
-                        }
-                        if !host.is_null() {
-                            PostMessageW(host, WM_SAVE_AUTOSTART, 0, 0);
-                        }
-                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
-                    }
-                } else if ey >= 942 && ey <= 970 {
-                    if x >= 20 && x <= 200 {
-                        open_config_dir();
-                    }
+                    windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+                } else if let Some(id) = settings::hit_test(&page, x, y - settings::CONTENT_TOP + scroll_y) {
+                    dispatch_settings_click(hwnd, host, id);
                 } else if y >= height - 48 && y <= height - 14 {
                     if x >= 20 && x <= 180 {
                         if let Some(state_arc) = &PANEL_STATE {
@@ -1255,191 +1114,175 @@ fn update_status_line(state: &crate::update::UpdateState) -> String {
     }
 }
 
-unsafe fn render_settings_view(
-    mem_dc: HDC,
-    width: i32,
-    height: i32,
-    font_scale: f32,
-    poll_ms: u64,
-    ball_on: bool,
-    ball_opacity: u8,
-    enable_toast: bool,
-    toast_info: u8,
-    toast_warn: u8,
-    toast_crit: u8,
-    toast_gaming: bool,
-    toast_sound: bool,
-    ui_density: crate::config::UiDensity,
-    device_filter: crate::config::DeviceFilter,
-    device_sort: crate::config::DeviceSort,
-    accent_theme: crate::config::AccentTheme,
-    scroll_y: i32,
-    hover_btn: i32,
-    auto_update: bool,
-    auto_start: bool,
-) {
-    let sy = scroll_y;
-    let f_title = create_clear_font((14.0 * font_scale).round() as i32, true);
-    let old_f = SelectObject(mem_dc, f_title);
-    SetTextColor(mem_dc, CLR_TEXT);
-    let mut s1_t = RECT { left: 20, top: 76 - sy, right: width - 20, bottom: 96 - sy };
-    draw_text_clean(mem_dc, "1. 定时通信间隔 (后台巡检轮询)", &mut s1_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    let f_desc = create_clear_font((12.0 * font_scale).round() as i32, false);
-    SelectObject(mem_dc, f_desc);
-    SetTextColor(mem_dc, CLR_MUTED);
-    let mut s1_d = RECT { left: 20, top: 96 - sy, right: width - 20, bottom: 114 - sy };
-    draw_text_clean(mem_dc, "外设电量消耗慢，推荐长周期以极致省电；随时点击'立即刷新'可秒级直读当前电量。", &mut s1_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    render_choice_pill(mem_dc, 20,  118 - sy, 72, 26, "30s 调试",  poll_ms <= 45_000,                           hover_btn == 30, font_scale);
-    render_choice_pill(mem_dc, 98,  118 - sy, 72, 26, "1m 快速",   poll_ms > 45_000 && poll_ms <= 120_000,      hover_btn == 31, font_scale);
-    render_choice_pill(mem_dc, 176, 118 - sy, 78, 26, "5m 推荐",   poll_ms > 120_000 && poll_ms <= 600_000,     hover_btn == 32, font_scale);
-    render_choice_pill(mem_dc, 260, 118 - sy, 78, 26, "15m 适中",  poll_ms > 600_000 && poll_ms <= 1_200_000,   hover_btn == 33, font_scale);
-    render_choice_pill(mem_dc, 344, 118 - sy, 78, 26, "30m 省电",  poll_ms > 1_200_000 && poll_ms <= 2_700_000, hover_btn == 34, font_scale);
-    render_choice_pill(mem_dc, 428, 118 - sy, 78, 26, "1h 极省",   poll_ms > 2_700_000,                         hover_btn == 35, font_scale);
-
-    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut s2_t = RECT { left: 20, top: 156 - sy, right: width - 20, bottom: 176 - sy };
-    draw_text_clean(mem_dc, "2. 界面显示字号 (ClearType 次像素渲染)", &mut s2_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
-    let mut s2_d = RECT { left: 20, top: 176 - sy, right: width - 20, bottom: 194 - sy };
-    draw_text_clean(mem_dc, "Windows 微软雅黑高分屏抗锯齿次像素渲染字体缩放比例：", &mut s2_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    let is_s100 = font_scale <= 1.05;
-    let is_s115 = font_scale > 1.05 && font_scale <= 1.22;
-    let is_s130 = font_scale > 1.22;
-    render_choice_pill(mem_dc, 20,  198 - sy, 92, 26, "100% 标准", is_s100, hover_btn == 40, font_scale);
-    render_choice_pill(mem_dc, 120, 198 - sy, 92, 26, "115% 适中", is_s115, hover_btn == 41, font_scale);
-    render_choice_pill(mem_dc, 220, 198 - sy, 92, 26, "130% 放大", is_s130, hover_btn == 42, font_scale);
-
-    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut s3_t = RECT { left: 20, top: 236 - sy, right: width - 20, bottom: 256 - sy };
-    draw_text_clean(mem_dc, "3. 桌面贴边悬浮球", &mut s3_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
-    let mut s3_d = RECT { left: 20, top: 256 - sy, right: width - 20, bottom: 274 - sy };
-    draw_text_clean(mem_dc, "吸附于屏幕边缘的半环能量仪表，悬停还原完整圆球，点击展开抽屉：", &mut s3_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    let ball_text = if ball_on { "🔘 贴边悬浮球: [已开启]" } else { "⚪ 贴边悬浮球: [已关闭]" };
-    render_choice_pill(mem_dc, 20, 278 - sy, 180, 28, ball_text, ball_on, hover_btn == 50, font_scale);
-
-    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
-    let mut s3_o = RECT { left: 20, top: 310 - sy, right: width - 20, bottom: 328 - sy };
-    draw_text_clean(
-        mem_dc,
-        &format!("悬浮球不透明度 (越低越通透，抽屉保持可读)：当前 {}%", ball_opacity),
-        &mut s3_o,
-        DT_LEFT | DT_SINGLELINE | DT_VCENTER,
-    );
-    for (i, pct) in [100u8, 90, 80, 70, 60].iter().enumerate() {
-        render_choice_pill(
-            mem_dc, 20 + (i as i32) * 76, 332 - sy, 70, 26,
-            &format!("{}%", pct), ball_opacity == *pct, hover_btn == 51 + i as i32, font_scale,
-        );
-    }
-
-    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut s4_t = RECT { left: 20, top: 366 - sy, right: width - 20, bottom: 386 - sy };
-    draw_text_clean(mem_dc, "4. 低电量原生 Toast 弹窗通知 (多级预警)", &mut s4_t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
-    let mut s4_d = RECT { left: 20, top: 386 - sy, right: width - 20, bottom: 404 - sy };
-    draw_text_clean(mem_dc, "跌破阈值时右下角弹出 Toast；危险阈值同步播放提示音；全屏或游戏时降级/免打扰：", &mut s4_d, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    let toast_text = if enable_toast { "🔔 电量弹窗: [已开启]" } else { "🔕 电量弹窗: [已关闭]" };
-    render_choice_pill(mem_dc, 20,  408 - sy, 160, 26, toast_text, enable_toast, hover_btn == 60, font_scale);
-    let game_text = if toast_gaming { "🎮 游戏全屏免打扰: [已开启]" } else { "🎮 游戏全屏免打扰: [已关闭]" };
-    render_choice_pill(mem_dc, 190, 408 - sy, 190, 26, game_text, toast_gaming,  hover_btn == 61, font_scale);
-    let sound_text = if toast_sound { "🔊 傻妞饿死了提示音: [已开启]" } else { "🔇 傻妞饿死了提示音: [已关闭]" };
-    render_choice_pill(mem_dc, 390, 408 - sy, 210, 26, sound_text, toast_sound, hover_btn == 62, font_scale);
-    let info_str = format!("提示: < {}%", toast_info);
-    let warn_str = format!("警告: < {}%", toast_warn);
-    let crit_str = format!("危险: < {}%", toast_crit);
-    render_choice_pill(mem_dc, 20,  444 - sy, 105, 26, &info_str,          true, hover_btn == 70, font_scale);
-    render_choice_pill(mem_dc, 135, 444 - sy, 105, 26, &warn_str,          true, hover_btn == 71, font_scale);
-    render_choice_pill(mem_dc, 250, 444 - sy, 105, 26, &crit_str,          true, hover_btn == 72, font_scale);
-    render_choice_pill(mem_dc, 365, 444 - sy, 140, 26, "🚀 试发一条Toast", false, hover_btn == 80, font_scale);
-    render_choice_pill(mem_dc, 515, 444 - sy, 85, 26,  "🎵 试听",         false, hover_btn == 81, font_scale);
-
-    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut density_title = RECT { left: 20, top: 486 - sy, right: width - 20, bottom: 504 - sy };
-    draw_text_clean(mem_dc, "5. 卡片布局密度", &mut density_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
-    let mut density_desc = RECT { left: 20, top: 504 - sy, right: width - 20, bottom: 522 - sy };
-    draw_text_clean(mem_dc, "紧凑适合小窗口；宽松提供更舒适的信息间距。", &mut density_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    render_choice_pill(mem_dc, 20,  526 - sy, 90, 26, "紧凑布局", matches!(ui_density, crate::config::UiDensity::Compact),  hover_btn == 100, font_scale);
-    render_choice_pill(mem_dc, 118, 526 - sy, 90, 26, "标准布局", matches!(ui_density, crate::config::UiDensity::Standard), hover_btn == 101, font_scale);
-    render_choice_pill(mem_dc, 216, 526 - sy, 90, 26, "宽松布局", matches!(ui_density, crate::config::UiDensity::Spacious), hover_btn == 102, font_scale);
-
-    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut dashboard_title = RECT { left: 20, top: 558 - sy, right: width - 20, bottom: 576 - sy };
-    draw_text_clean(mem_dc, "6. 设备列表", &mut dashboard_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
-    let mut dashboard_desc = RECT { left: 20, top: 576 - sy, right: width - 20, bottom: 594 - sy };
-    draw_text_clean(mem_dc, "筛选和排序仅影响显示顺序，不会改变后台扫描。", &mut dashboard_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    render_choice_pill(mem_dc, 20,  598 - sy, 72, 26, "全部",   matches!(device_filter, crate::config::DeviceFilter::All),        hover_btn == 120, font_scale);
-    render_choice_pill(mem_dc, 98,  598 - sy, 84, 26, "低电量", matches!(device_filter, crate::config::DeviceFilter::LowBattery), hover_btn == 121, font_scale);
-    render_choice_pill(mem_dc, 188, 598 - sy, 84, 26, "充电中", matches!(device_filter, crate::config::DeviceFilter::Charging),   hover_btn == 122, font_scale);
-    render_choice_pill(mem_dc, 278, 598 - sy, 72, 26, "蓝牙",   matches!(device_filter, crate::config::DeviceFilter::Bluetooth),  hover_btn == 123, font_scale);
-    render_choice_pill(mem_dc, 356, 598 - sy, 72, 26, "2.4G",   matches!(device_filter, crate::config::DeviceFilter::Wireless),   hover_btn == 124, font_scale);
-    render_choice_pill(mem_dc, 20,  634 - sy, 82, 26, "优先级", matches!(device_sort, crate::config::DeviceSort::Priority),       hover_btn == 125, font_scale);
-    render_choice_pill(mem_dc, 110, 634 - sy, 82, 26, "名称",   matches!(device_sort, crate::config::DeviceSort::Name),           hover_btn == 126, font_scale);
-    render_choice_pill(mem_dc, 200, 634 - sy, 82, 26, "电量",   matches!(device_sort, crate::config::DeviceSort::Battery),        hover_btn == 127, font_scale);
-    render_choice_pill(mem_dc, 290, 634 - sy, 82, 26, "更新时间", matches!(device_sort, crate::config::DeviceSort::Updated),      hover_btn == 128, font_scale);
-
-    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut theme_title = RECT { left: 20, top: 666 - sy, right: width - 20, bottom: 684 - sy };
-    draw_text_clean(mem_dc, "7. 主题强调色", &mut theme_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    render_choice_pill(mem_dc, 20,  688 - sy, 90, 26, "橙色", matches!(accent_theme, crate::config::AccentTheme::Orange), hover_btn == 130, font_scale);
-    render_choice_pill(mem_dc, 118, 688 - sy, 90, 26, "蓝色", matches!(accent_theme, crate::config::AccentTheme::Blue),   hover_btn == 131, font_scale);
-    render_choice_pill(mem_dc, 216, 688 - sy, 90, 26, "紫色", matches!(accent_theme, crate::config::AccentTheme::Purple), hover_btn == 132, font_scale);
-    render_choice_pill(mem_dc, 314, 688 - sy, 90, 26, "绿色", matches!(accent_theme, crate::config::AccentTheme::Green),  hover_btn == 133, font_scale);
-
-    // 8. 版本与更新
-    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut upd_title = RECT { left: 20, top: 734 - sy, right: width - 20, bottom: 752 - sy };
-    draw_text_clean(mem_dc, "8. 版本与更新 (单一 exe 自替换)", &mut upd_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    SelectObject(mem_dc, f_desc);
+/// Settings-page snapshot for the layout engine.
+fn settings_ctx(state: &PanelStateData) -> settings::Ctx {
     let upd = crate::update::snapshot();
-    SetTextColor(mem_dc, if upd.error.is_some() { CLR_RED } else { CLR_MUTED });
-    let upd_status = update_status_line(&upd);
-    let mut upd_desc = RECT { left: 20, top: 752 - sy, right: width - 20, bottom: 770 - sy };
-    draw_text_clean(mem_dc, &upd_status, &mut upd_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-
-    render_choice_pill(
-        mem_dc, 20, 776 - sy, 190, 26,
-        if auto_update { "自动检查更新: 开" } else { "自动检查更新: 关" },
-        auto_update, hover_btn == 140, font_scale,
-    );
-    render_choice_pill(
-        mem_dc, 218, 776 - sy, 96, 26,
-        if upd.checking { "检查中…" } else { "检查更新" },
-        false, hover_btn == 141, font_scale,
-    );
-    if let Some(latest) = upd.latest.as_deref().filter(|v| crate::update::is_newer(v, crate::update::current_version())) {
-        render_choice_pill(
-            mem_dc, 322, 776 - sy, 214, 26,
-            &format!("立即升级到 v{}", latest),
-            true, hover_btn == 142, font_scale,
-        );
+    let latest = upd
+        .latest
+        .clone()
+        .filter(|v| crate::update::is_newer(v, crate::update::current_version()));
+    settings::Ctx {
+        font_scale: state.font_scale,
+        poll_ms: state.poll_interval_ms,
+        ball_on: state.floating_ball_enabled,
+        ball_opacity: state.ball_opacity,
+        enable_toast: state.enable_toast,
+        toast_info: state.toast_info,
+        toast_warn: state.toast_warning,
+        toast_crit: state.toast_critical,
+        toast_gaming: state.toast_gaming_suppression,
+        toast_sound: state.enable_low_battery_sound,
+        ui_density: state.ui_density,
+        device_filter: state.device_filter,
+        device_sort: state.device_sort,
+        accent_theme: state.accent_theme,
+        auto_update: state.auto_update,
+        auto_start: state.auto_start,
+        update_line: update_status_line(&upd),
+        update_available: latest.is_some(),
+        latest_version: latest,
+        config_path: crate::config::AppConfig::config_path().display().to_string(),
     }
+}
 
-    // 9. 开机自启
-    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut startup_title = RECT { left: 20, top: 818 - sy, right: width - 20, bottom: 836 - sy };
-    draw_text_clean(mem_dc, "9. 开机自动启动 (Windows 登录时)", &mut startup_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
-    let mut startup_desc = RECT { left: 20, top: 836 - sy, right: width - 20, bottom: 854 - sy };
-    draw_text_clean(mem_dc, "写入当前用户注册表 Run 项，登录后静默常驻托盘，不弹出主界面：", &mut startup_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    let startup_text = if auto_start { "🚀 开机自启: [已开启]" } else { "⚪ 开机自启: [已关闭]" };
-    render_choice_pill(mem_dc, 20, 860 - sy, 200, 28, startup_text, auto_start, hover_btn == 150, font_scale);
+fn fallback_settings_ctx() -> settings::Ctx {
+    let config = crate::config::AppConfig::default();
+    settings::Ctx {
+        font_scale: config.font_scale,
+        poll_ms: config.poll_interval_ms,
+        ball_on: config.enable_floating_ball,
+        ball_opacity: config.floating_ball_opacity,
+        enable_toast: config.enable_battery_toast,
+        toast_info: config.toast_threshold_info,
+        toast_warn: config.toast_threshold_warning,
+        toast_crit: config.toast_threshold_critical,
+        toast_gaming: config.toast_gaming_suppression,
+        toast_sound: config.enable_low_battery_sound,
+        ui_density: config.ui_density,
+        device_filter: config.device_filter,
+        device_sort: config.device_sort,
+        accent_theme: config.accent_theme,
+        auto_update: config.check_updates,
+        auto_start: false,
+        update_line: "当前版本 · 可手动检查更新".to_string(),
+        update_available: false,
+        latest_version: None,
+        config_path: crate::config::AppConfig::config_path().display().to_string(),
+    }
+}
 
-    // 10. 配置文件目录
-    SelectObject(mem_dc, f_title); SetTextColor(mem_dc, CLR_TEXT);
-    let mut config_title = RECT { left: 20, top: 900 - sy, right: width - 20, bottom: 918 - sy };
-    draw_text_clean(mem_dc, "10. 配置文件目录", &mut config_title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    SelectObject(mem_dc, f_desc); SetTextColor(mem_dc, CLR_MUTED);
-    let config_path = crate::config::AppConfig::config_path();
-    let mut config_desc = RECT { left: 20, top: 918 - sy, right: width - 20, bottom: 936 - sy };
-    draw_text_clean(mem_dc, &config_path.display().to_string(), &mut config_desc, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-    render_choice_pill(mem_dc, 20, 942 - sy, 180, 28, "📁 打开配置目录", false, hover_btn == 151, font_scale);
+unsafe fn dispatch_settings_click(hwnd: HWND, host: HWND, id: i32) {
+    let send_cmd = |cmd: usize| {
+        if !host.is_null() {
+            PostMessageW(
+                host,
+                windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
+                cmd as _,
+                0,
+            );
+        }
+    };
+    let toggle_state = |f: &dyn Fn(&mut PanelStateData)| {
+        if let Some(state_arc) = &PANEL_STATE {
+            f(&mut state_arc.lock().unwrap());
+        }
+        if !host.is_null() {
+            PostMessageW(host, WM_SAVE_TOAST_SETTINGS, 0, 0);
+        }
+        windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+    };
 
-    SelectObject(mem_dc, old_f);
-    DeleteObject(f_title);
-    DeleteObject(f_desc);
+    match id {
+        30 => send_cmd(crate::ui::tray::IDM_POLL_30S),
+        31 => send_cmd(crate::ui::tray::IDM_POLL_1M),
+        32 => send_cmd(crate::ui::tray::IDM_POLL_5M),
+        33 => send_cmd(crate::ui::tray::IDM_POLL_15M),
+        34 => send_cmd(crate::ui::tray::IDM_POLL_30M),
+        35 => send_cmd(crate::ui::tray::IDM_POLL_60M),
+        40 => send_cmd(crate::ui::tray::IDM_FONT_SCALE_100),
+        41 => send_cmd(crate::ui::tray::IDM_FONT_SCALE_115),
+        42 => send_cmd(crate::ui::tray::IDM_FONT_SCALE_130),
+        50 => send_cmd(crate::ui::tray::IDM_TOGGLE_BALL),
+        60 => toggle_state(&|s: &mut PanelStateData| s.enable_toast = !s.enable_toast),
+        61 => toggle_state(&|s: &mut PanelStateData| s.toast_gaming_suppression = !s.toast_gaming_suppression),
+        62 => toggle_state(&|s: &mut PanelStateData| s.enable_low_battery_sound = !s.enable_low_battery_sound),
+        70 => toggle_state(&|s: &mut PanelStateData| {
+            s.toast_info = match s.toast_info { 40 => 50, 50 => 60, _ => 40 };
+        }),
+        71 => toggle_state(&|s: &mut PanelStateData| {
+            s.toast_warning = match s.toast_warning { 20 => 30, 30 => 35, _ => 20 };
+        }),
+        72 => toggle_state(&|s: &mut PanelStateData| {
+            s.toast_critical = match s.toast_critical { 5 => 10, 10 => 15, _ => 5 };
+        }),
+        80 => crate::ui::toast::ToastNotification::show(
+            "罗技 M720 Triathlon",
+            "电量已降至 28% (警告通知测试)",
+            crate::ui::toast::ToastLevel::Warning,
+            28,
+        ),
+        81 => crate::sound::play_low_battery_alarm(),
+        100 => set_panel_density(hwnd, host, crate::config::UiDensity::Compact),
+        101 => set_panel_density(hwnd, host, crate::config::UiDensity::Standard),
+        102 => set_panel_density(hwnd, host, crate::config::UiDensity::Spacious),
+        120 => set_dashboard_filter(hwnd, host, crate::config::DeviceFilter::All),
+        121 => set_dashboard_filter(hwnd, host, crate::config::DeviceFilter::LowBattery),
+        122 => set_dashboard_filter(hwnd, host, crate::config::DeviceFilter::Charging),
+        123 => set_dashboard_filter(hwnd, host, crate::config::DeviceFilter::Bluetooth),
+        124 => set_dashboard_filter(hwnd, host, crate::config::DeviceFilter::Wireless),
+        125 => set_dashboard_sort(hwnd, host, crate::config::DeviceSort::Priority),
+        126 => set_dashboard_sort(hwnd, host, crate::config::DeviceSort::Name),
+        127 => set_dashboard_sort(hwnd, host, crate::config::DeviceSort::Battery),
+        128 => set_dashboard_sort(hwnd, host, crate::config::DeviceSort::Updated),
+        130 => set_accent_theme(hwnd, host, crate::config::AccentTheme::Orange),
+        131 => set_accent_theme(hwnd, host, crate::config::AccentTheme::Blue),
+        132 => set_accent_theme(hwnd, host, crate::config::AccentTheme::Purple),
+        133 => set_accent_theme(hwnd, host, crate::config::AccentTheme::Green),
+        140 => {
+            if let Some(state_arc) = &PANEL_STATE {
+                let mut st = state_arc.lock().unwrap();
+                st.auto_update = !st.auto_update;
+            }
+            if !host.is_null() {
+                PostMessageW(host, WM_SAVE_UPDATE_PREFS, 0, 0);
+            }
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+        }
+        141 => send_cmd(crate::ui::tray::IDM_CHECK_UPDATE),
+        142 => {
+            if crate::update::has_update() {
+                send_cmd(crate::ui::tray::IDM_APPLY_UPDATE);
+            }
+        }
+        150 => {
+            if let Some(state_arc) = &PANEL_STATE {
+                let mut st = state_arc.lock().unwrap();
+                st.auto_start = !st.auto_start;
+            }
+            if !host.is_null() {
+                PostMessageW(host, WM_SAVE_AUTOSTART, 0, 0);
+            }
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
+        }
+        151 => open_config_dir(),
+        _ => {}
+    }
+}
+
+unsafe fn set_dashboard_filter(hwnd: HWND, host: HWND, filter: crate::config::DeviceFilter) {
+    let sort = PANEL_STATE
+        .as_ref()
+        .and_then(|sa| sa.lock().ok().map(|s| s.device_sort))
+        .unwrap_or(crate::config::DeviceSort::Priority);
+    set_dashboard_preferences(hwnd, host, filter, sort);
+}
+
+unsafe fn set_dashboard_sort(hwnd: HWND, host: HWND, sort: crate::config::DeviceSort) {
+    let filter = PANEL_STATE
+        .as_ref()
+        .and_then(|sa| sa.lock().ok().map(|s| s.device_filter))
+        .unwrap_or(crate::config::DeviceFilter::All);
+    set_dashboard_preferences(hwnd, host, filter, sort);
 }
 
 
@@ -1747,5 +1590,6 @@ mod tests {
     fn test_rename_message_constant() {
         assert_eq!(WM_DEVICE_RENAME, 0x8000 + 101);
     }
+
 
 }

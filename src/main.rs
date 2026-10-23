@@ -797,14 +797,21 @@ unsafe extern "system" fn host_wnd_proc(
             0
         }
         crate::ui::panel::WM_SET_BALL_OPACITY => {
+            // 拖拽过程中只应用不落盘，避免逐像素写配置文件
             if let Some(app_arc) = &APP_INSTANCE {
                 let mut app = app_arc.lock().unwrap();
                 app.config.floating_ball_opacity = (wparam as u8).clamp(40, 100);
-                let _ = app.config.save();
                 let alpha = app.config.ball_alpha();
                 if let Some(fb) = &app.floating_ball {
                     fb.set_opacity(alpha);
                 }
+            }
+            0
+        }
+        crate::ui::panel::WM_SAVE_BALL_OPACITY => {
+            if let Some(app_arc) = &APP_INSTANCE {
+                let app = app_arc.lock().unwrap();
+                let _ = app.config.save();
             }
             0
         }

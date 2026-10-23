@@ -81,17 +81,18 @@
        - 右侧平直边竖排显示当前设备电量数字与轮播指示点。
      - **悬停状态（完整能量球）**：鼠标移入立刻还原为 48×56px 完整圆球（48×48 球体），显示设备图标 ⌨️/🖱️/🎧、电量数字与底部轮播点；充电时顶部常亮 `⚡` 角标。
        - **多外设自动轮播 (Carousel)**：每 3 秒自动平滑轮播当前活跃外设，鼠标悬停时**滚动鼠标滚轮**可立即手动切台。
-     - **透明度可调**：`偏好设置 → 3. 桌面贴边悬浮球` 提供 100% / 90% / 80% / 70% / 60% 五档，写入 `config.json` 的 `floating_ball_opacity`（40–100，可手改任意值）；展开抽屉另有可读性下限，调低时依然清晰。
+     - **透明度可拖拽**：`偏好设置 → 悬浮球` 里直接拖动滑块（40%–100%，1% 步进），松手才写盘到 `config.json` 的 `floating_ball_opacity`；展开抽屉另有可读性下限，调低时依然清晰。
      - **展开状态**：点击小球向左滑出抽屉式外设卡片预览，包含各设备电量进度条、供电来源（电脑USB充电 / 充电头充电）与毫伏高精度电压，支持点击右上角 `▶` 快速收回。
    - **随手拖拽**：长按鼠标左键可沿屏幕边缘自由上下拖拽，松手自动贴边吸附并记忆高度。
 2. **任务栏系统托盘 (System Tray)**：
    - 悬停即显详尽电量气泡，右键提供完整控制菜单（包括悬浮球开关、字号切换等）。
-3. **外设控制中心主面板 (Control Center Dashboard)**：
+3. **偏好设置分组化**：设置页按「界面 / 悬浮球 / 通知 / 设备 / 系统」五组划分，顶部常驻分组导航（点击直接跳到对应卡片），每组内容以独立卡片呈现；所有控件的坐标由同一份布局结果驱动绘制与点击，不再出现“看得见点不着”。
+4. **外设控制中心主面板 (Control Center Dashboard)**：
    - 点击小球底部的 `⚙️ 打开控制中心` 或托盘菜单即可唤起。
    - 包含多设备卡片、高精度毫伏电压读数、协议类型标注，以及内置 **字体大小切换器（100% 标准 / 115% 适中 / 130% 放大）**。
 
 ### 自动更新 (单一 exe 自替换)
-- 启动 10 秒后自动检查一次 GitHub Releases，此后每 6 小时轮询；可在 `偏好设置 → 8. 版本与更新` 关闭。
+- 启动 10 秒后自动检查一次 GitHub Releases，此后每 6 小时轮询；可在 `偏好设置 → 系统 → 版本与更新` 关闭。
 - 版本比较按语义化版本（`v0.5.0 > v0.4.1`），只有远端更高时才提示，不会重复打扰。
 - 升级流程：WinHTTP 下载 → 校验 `MZ` 头与体积 → 把运行中的 exe 改名为 `*.old.exe` → 复制新文件 → 拉起新进程并等待启动标记后旧进程退出 → 下次启动清理备份。
 - 新进程被拦截、立即崩溃或 5 秒内未就绪会自动回滚到原版本，并写入 `%APPDATA%\LinkDeck\update.log`；任一步失败原 exe 不会丢失；安装在只读目录（如 `Program Files`）时会给出明确提示。
@@ -104,7 +105,7 @@
 
 ### 低电量语音提示 ("饿死了")
 - 电量跌破危险阈值（默认 `< 10%`）时，右下角 Toast 与语音提示**同时触发**；同一档位只响一次，充上电后自动复位，重新跌破会再次提醒。
-- 内置音效为微软 Edge 神经网络女声合成的「饿死了」，以 WAV 内嵌进 exe（`assets/low_battery_esi.wav`），单文件运行无需任何外部资源；`偏好设置 → 4. 低电量通知` 可开关，点 `🎵 试听` 立即试听。
+- 内置音效为微软 Edge 神经网络女声合成的「饿死了」，以 WAV 内嵌进 exe（`assets/low_battery_esi.wav`），单文件运行无需任何外部资源；`偏好设置 → 通知 → 低电量 Toast 弹窗` 可开关，点 `🎵 试听` 立即试听。
 - 需要重新生成默认音效时执行 `scripts\gen_low_battery_sound.ps1`（依赖 edge-tts 与 ffmpeg），脚本会保留最后一个字的自然收音，不会硬切。
 
 ### Dashboard convenience features
@@ -113,8 +114,8 @@
 - Device lists can be sorted by priority, name, battery percentage, or last update time; priority surfaces low-battery online devices first.
 - Clicking a device card selects it for detail-oriented interaction; copy and rename actions remain available on each card.
 - Preferences include compact/standard/spacious density, accent color, notification thresholds, and refresh interval controls.
-- 开机自启：`偏好设置 → 9. 开机自动启动`（或托盘右键菜单）可随时开启/关闭，写入当前用户 `HKCU\...\CurrentVersion\Run`，无需管理员权限；程序移动或自更新后会按当前 exe 路径自动刷新。
-- 配置文件目录：`偏好设置 → 10. 配置文件目录` 显示 `config.json` 完整路径，点击「打开配置目录」即用资源管理器定位到 `%APPDATA%\LinkDeck`。
+- 开机自启：`偏好设置 → 系统 → 开机自动启动`（或托盘右键菜单）可随时开启/关闭，写入当前用户 `HKCU\...\CurrentVersion\Run`，无需管理员权限；程序移动或自更新后会按当前 exe 路径自动刷新。
+- 配置文件目录：`偏好设置 → 系统 → 配置文件目录` 显示 `config.json` 完整路径，点击「打开配置目录」即用资源管理器定位到 `%APPDATA%\LinkDeck`。
 - The first-run panel explains the floating ball, tray entry, and supported battery monitoring workflow.
 
 ---
