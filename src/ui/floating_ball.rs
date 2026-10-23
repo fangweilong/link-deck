@@ -34,7 +34,7 @@ pub const BALL_SIZE: i32 = 48;
 /// 窗口高度取收纳态拉手的高度，悬停时的完整球体居中绘制在同一个窗口里。
 pub const DOCK_H: i32 = 64;
 /// 贴边拉手宽度：右侧贴屏幕，左侧两个角做圆角。
-const TAB_W: i32 = 24;
+const TAB_W: i32 = 26;
 const TAB_RADIUS: f32 = 9.0;
 pub const EXPANDED_HEIGHT: i32 = 205;
 const CLR_COLORKEY: COLORREF = 0x00FF00FF; // Magenta colorkey for transparent edges
@@ -772,15 +772,20 @@ unsafe fn render_tab_widget(
     };
 
     let bg = (0x16u8, 0x19u8, 0x1Eu8);
-    // 整块染色会太抢眼，只用很淡的充能底色 + 一圈电量色描边
-    let level_rgb = blend(bg, accent, 0.12);
-    let border_rgb = blend(bg, accent, 0.62);
+    let border_rgb = blend(bg, accent, 0.45);
+    let track_rgb = (0x2Cu8, 0x32u8, 0x3Au8);
 
     let x0 = (w - TAB_W) as f32;
     let x1 = w as f32;
     let y0 = 1.0f32;
     let y1 = h as f32 - 1.0;
-    let level_y = y1 - (h as f32) * (pct.unwrap_or(0).min(100) as f32 / 100.0);
+
+    // 左侧独立的竖向电量条：文字永远压在深色底上，任何档位都清晰
+    let gauge_x0 = x0 + 4.0;
+    let gauge_x1 = gauge_x0 + 3.0;
+    let gauge_y0 = 7.0;
+    let gauge_y1 = h as f32 - 7.0;
+    let level_y = gauge_y1 - (gauge_y1 - gauge_y0) * (pct.unwrap_or(0).min(100) as f32 / 100.0);
 
     let mut pixels = vec![CLR_COLORKEY; (w * h) as usize];
     let sub = [0.2f32, 0.5f32, 0.8f32];
@@ -790,6 +795,7 @@ unsafe fn render_tab_widget(
         for x in 0..w {
             let mut inside = 0.0f32;
             let mut edge = 0.0f32;
+            let mut gauge = 0.0f32;
             let mut filled = 0.0f32;
 
             for &sy in &sub {
@@ -810,8 +816,11 @@ unsafe fn render_tab_widget(
                         ) {
                             edge += 1.0;
                         }
-                        if py >= level_y {
-                            filled += 1.0;
+                        if px >= gauge_x0 && px <= gauge_x1 && py >= gauge_y0 && py <= gauge_y1 {
+                            gauge += 1.0;
+                            if py >= level_y {
+                                filled += 1.0;
+                            }
                         }
                     }
                 }
@@ -822,8 +831,9 @@ unsafe fn render_tab_widget(
             }
 
             let alpha = inside / n_sub;
+            let bar = blend(track_rgb, accent, filled / gauge.max(1.0));
             let rgb = blend(
-                blend(bg, level_rgb, filled / n_sub),
+                blend(bg, bar, gauge / n_sub),
                 border_rgb,
                 edge / n_sub,
             );
@@ -876,14 +886,14 @@ unsafe fn render_tab_widget(
     };
     SetTextColor(hdc, icon_clr);
     let mut icon_rect = RECT {
-        left: (w - TAB_W) as i32,
+        left: (w - TAB_W + 9) as i32,
         top: 6,
         right: w,
         bottom: 24,
     };
     draw_text_clean(hdc, icon_str, &mut icon_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
-    let pct_size = (11.0 * font_scale).round().clamp(10.0, 11.0) as i32;
+    let pct_size = (10.0 * font_scale).round().clamp(9.0, 10.0) as i32;
     let font_pct = create_clear_font(pct_size, true);
     SelectObject(hdc, font_pct);
     SetTextColor(hdc, if online { CLR_TEXT } else { CLR_TEXT_MUTED });
@@ -894,8 +904,9 @@ unsafe fn render_tab_widget(
     } else {
         "--".to_string()
     };
+    SetTextColor(hdc, if online { CLR_TEXT } else { CLR_TEXT_MUTED });
     let mut pct_rect = RECT {
-        left: (w - TAB_W) as i32,
+        left: (w - TAB_W + 9) as i32,
         top: 25,
         right: w,
         bottom: 43,
@@ -1454,5 +1465,6 @@ mod tests {
         assert_eq!(carousel.len(), 1);
         assert_eq!(carousel[0].id, "mouse");
     }
+
 
 }

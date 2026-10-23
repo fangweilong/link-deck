@@ -199,7 +199,7 @@ fn build(ctx: &Ctx) -> Vec<Card> {
     cards.push(Card {
         group: 1,
         title: "贴边悬浮球".into(),
-        desc: Some("贴边为 24×64 圆角拉手（只占 24px），悬停还原完整能量球，点击展开抽屉。".into()),
+        desc: Some("贴边为 26×64 圆角拉手（只占 26px），左侧竖向电量条，悬停还原完整能量球。".into()),
         rows: vec![
             Row::Pills(vec![pill(
                 if ctx.ball_on { "🔘 已开启" } else { "⚪ 已关闭" },
