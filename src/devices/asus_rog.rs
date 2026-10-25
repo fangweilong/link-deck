@@ -3,6 +3,7 @@
 //! 协议类型: Armoury Crate (奥创) 私有 2.4G 无线 / USB 有线专有协议
 //! 通信机制: 64字节 Feature Report (鼠标 0x1207 / 键盘 0x1201)，支持 Omni 统一接收器
 //! 代表设备: 龙鳞 Ace (Harpe Ace)、月刃 (Keris)、战刃 (Gladius III)、夜魔 (Azoth)、魔导士 (Falchion) 等
+//! 实机验证: 未实测 — 按公开协议资料实现，待对应硬件验证
 //! ==============================================================================
 
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};

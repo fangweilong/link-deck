@@ -3,6 +3,7 @@
 //! 协议类型: M-HUB 专有无线接收器与 USB 有线通信协议
 //! 通信机制: Feature Report 0x11 指令 0x06 (全包 XOR 0xFF 掩码通信与电量提取)
 //! 代表设备: 迈从 A5 / A5 Pro / A5 Pro Max、AX5 / AX5 Pro、G3、A7 Ultra、L7、M7 等
+//! 实机验证: 未实测 — 按公开协议资料实现，待对应硬件验证
 //! ==============================================================================
 
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};

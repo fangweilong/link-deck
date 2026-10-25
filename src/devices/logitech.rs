@@ -3,6 +3,7 @@
 //! 协议类型: 官方 HID++ 2.0 / 1.0 双协议 (Lightspeed 2.4G 无线 / 优联 / Bolt / USB 有线)
 //! 通信机制: Feature 0x1004 (Unified Battery) 与 Feature 0x1000 (Battery Status) 探针
 //! 代表设备: GPW 狗屁王 1/2/3 代、G502、G304、G903、G913/G915 键盘、MX Master 3/3S 等
+//! 实机验证: 已实测 — MX Master 3S
 //! ==============================================================================
 
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};
@@ -94,7 +95,7 @@ impl LogitechDriver {
             }
         }
 
-        // 2. Query Feature 0x1000 (Battery Status - Used by M720 Triathlon, MX Master 2S, etc.)
+        // 2. Query Feature 0x1000 (Battery Status - legacy models without 0x1004)
         let feat_1000_idx = Self::get_feature_index(&dev, dev_idx, 0x1000, timeout);
 
         if let Some(idx) = feat_1000_idx {
@@ -289,7 +290,6 @@ pub fn lookup_logitech_name(pid: u16, hw_name: Option<&str>) -> String {
     }
 
     match pid {
-        0x405E | 0xB015 => "Logitech M720 Triathlon 多设备无线鼠标".to_string(),
         0x408A => "Logitech G Pro Wireless (GPW 狗屁王)".to_string(),
         0x408C => "Logitech G Pro X Superlight (GPW 2代)".to_string(),
         0x4053 => "Logitech G304 Lightspeed 无线鼠标".to_string(),
@@ -311,9 +311,6 @@ mod tests {
 
     #[test]
     fn test_lookup_logitech_name() {
-        let m720 = lookup_logitech_name(0x405E, None);
-        assert!(m720.contains("M720 Triathlon"));
-
         let gpw = lookup_logitech_name(0x408A, None);
         assert!(gpw.contains("GPW"));
 
@@ -327,6 +324,6 @@ mod tests {
     #[test]
     fn test_classify_logitech() {
         assert_eq!(classify_logitech(0x4088, ""), DeviceKind::Keyboard);
-        assert_eq!(classify_logitech(0x405E, "M720 Triathlon"), DeviceKind::Mouse);
+        assert_eq!(classify_logitech(0x4099, "MX Master 3S"), DeviceKind::Mouse);
     }
 }

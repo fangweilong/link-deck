@@ -1,14 +1,16 @@
 # LinkDeck
 
-**右下角贴边电量悬浮球 + 外设控制中心。** 一个约 2 MB 的 Rust 单文件程序，直连 2.4G 接收器与蓝牙外设，实时读出键盘 / 鼠标 / 耳机的电量与充电状态，免装任何原厂驱动。
+**右下角贴边电量悬浮球 + 外设电量监控面板。** 一个约 2 MB 的 Rust 单文件程序，直连 2.4G 接收器与蓝牙外设，实时读出键盘 / 鼠标 / 耳机的电量与充电状态，免装任何原厂驱动。
 
-- 免安装、免启动原厂臃肿软件（RK Keyboard Software、Saiggi TM015、Synapse……），省下数百 MB 后台内存。
+> **定位**：LinkDeck 只做电量监控——读取剩余电量、充电状态、电压与连接方式，不提供按键映射、灯效、DPI、宏等外设配置功能。
+
+- 只为看电量，不必常驻原厂软件（RK Keyboard Software、Saiggi TM015、Synapse……），省下数百 MB 后台内存。
 - 单个 exe，无运行时依赖，常驻内存约 11 MB，无控制台闪窗。
 - 支持 2.4G 无线接收器、USB 有线、蓝牙三种连接方式，覆盖键鼠 / 耳机 / 手柄。
 - 高分屏友好：按系统缩放渲染，微软雅黑 ClearType 次像素抗锯齿，字号可选 100% / 115% / 130%。
 
 <p align="center">
-  <img src="docs/screenshots/dashboard.png" width="860" alt="LinkDeck 控制中心">
+  <img src="docs/screenshots/dashboard.png" width="860" alt="LinkDeck 电量面板">
 </p>
 
 ---
@@ -43,7 +45,7 @@
 - **透明度可调**：滑块 40%–100%，1% 步进，松手才写盘。展开抽屉另有可读性下限，调低也不糊。
 - 点击球体滑出抽屉，右上角 `▶` 收回；抽屉底部 `⚙️ 打开控制中心` 直接唤起主面板。
 
-### 2. 控制中心（设备监控）
+### 2. 电量面板（设备监控）
 
 - 多设备卡片：实时电量进度条、协议类型标注、在线/充电/待机状态。
 - 高精度数据：电池端电压（如 `4241 mV (4.241 V)`）、连接模式（2.4G / 有线 / 蓝牙）；复制设备信息时一并带出 VID/PID 与物理路径。
@@ -82,21 +84,23 @@
 
 ## 🔌 支持的设备
 
-| 品牌 / 方案 | 典型支持型号 | 连接模式 |
-| :--- | :--- | :--- |
-| **罗技 Logitech** | GPW 1/2/3 代、G502 Lightspeed、G304、G903、M720 Triathlon、G913/G915、MX Master 3/3S 全系（HID++ 2.0/4.0 + 1.0 兼容） | 2.4G / 有线 |
-| **雷蛇 Razer** | 毒蝰 Viper V2 Pro / V3 Pro / Ultimate、炼狱蝰蛇 V2/V3 Pro、巴塞利斯蛇全系、眼镜蛇 Cobra Pro、那伽梵蛇、八岐大蛇（OpenRazer 报文） | 2.4G / 有线 |
-| **VXE / VGN / ATK** | 蜻蜓 R1 全系、MAD R / MAD R Major+、蜻蜓 F1/F2 系列、ATK F1 / A9 / Zero 8K（双代 Nordic 协议） | 2.4G / 有线 |
-| **迈从 MCHOSE** | A5 / A5 Pro / AX5 / A5 V3 / A7 / A7 Ultra / G3 / L7 / M7 / K7 系列（Legacy + Modern 双协议） | 2.4G / 有线 |
-| **RK / 狼蛛 / VGN / 新盟 / 珂芝 / 瓦尔基里** | RK108 / F75 / F99 / M75 / R75 / S98 / RK100 / RK87 / RK84 / RK68、狼蛛 F75/F87/F99/SC680、V87 / V98 / S99、新盟 X98 / M71、珂芝 K75 / K98 等（Compx 直读 + 电池放电曲线） | 2.4G / 有线 |
-| **赛技 / 黑爵 / 鲨客 / 多彩** | 赛技 TM015、黑爵与鲨客 R1/X3/X6/X11、多彩 M600 Pro 等（Xenta 异步协议） | 2.4G / 有线 |
-| **造品 / Scyrox / 达尔优** | 造品 Z2 / Z2 Mini、Scyrox V8、达尔优 A950 / A950 Air / A950 Wing、G-Wolves Lycan、Kysona M600 | 2.4G / 有线 |
-| **赛睿 SteelSeries** | Aerox 3/5/9 Wireless、Prime Wireless、Rival 650、Apex Pro 无线键盘、Arctis 7 / 9 / Pro / Nova 系列耳机 | 2.4G / 有线 |
-| **华硕 ASUS ROG / TUF** | 龙鳞 Ace、月刃 Keris、战刃 Gladius III、夜魔 Azoth、魔导士 Falchion、Claymore II 等（支持 Omni 接收器） | 2.4G / 有线 |
-| **美商海盗船 Corsair** | 暗影 Dark Core RGB Pro/SE、卡特 Katar Pro、铁爪 Ironclaw、圣剑 Sabre、K70 PRO Mini、K100 AIR、HS70/80 耳机 | 2.4G / 有线 |
-| **客制化键盘（QMK/VIA）** | Keychron、NuPhy、WOB 雨75、桥75、魔极客 MonsGeek、Hi75 等三模铝坨坨（蓝牙 GATT `0x180F`） | 蓝牙 |
-| **全品牌蓝牙外设** | AirPods / 华为 / 索尼 / 漫步者 / Bose 等蓝牙耳机，小米双模 / 罗技 Pebble 等蓝牙鼠标，蓝牙键盘、Xbox 蓝牙手柄 | 蓝牙 |
-| **标准 HID 电池规范** | 符合 Windows HID Power / Battery System（`0x0084` / `0x0085`）的第三方外设 | 2.4G / 有线 |
+| 品牌 / 方案 | 典型支持型号 | 连接模式 | 实机验证 |
+| :--- | :--- | :--- | :--- |
+| **罗技 Logitech** | GPW 1/2/3 代、G502 Lightspeed、G304、G903、G913/G915、MX Master 3/3S 全系（HID++ 2.0/4.0 + 1.0 兼容） | 2.4G / 有线 | ✅ MX Master 3S 已实测 |
+| **雷蛇 Razer** | 毒蝰 Viper V2 Pro / V3 Pro / Ultimate、炼狱蝰蛇 V2/V3 Pro、巴塞利斯蛇全系、眼镜蛇 Cobra Pro、那伽梵蛇、八岐大蛇（OpenRazer 报文） | 2.4G / 有线 | ⚠️ 未实测 |
+| **VXE / VGN / ATK** | 蜻蜓 R1 全系、MAD R / MAD R Major+、蜻蜓 F1/F2 系列、ATK F1 / A9 / Zero 8K（双代 Nordic 协议） | 2.4G / 有线 | ✅ VGN 蜻蜓 F1 Pro Max 已实测（其余型号/品牌未验证） |
+| **迈从 MCHOSE** | A5 / A5 Pro / AX5 / A5 V3 / A7 / A7 Ultra / G3 / L7 / M7 / K7 系列（Legacy + Modern 双协议） | 2.4G / 有线 | ⚠️ 未实测 |
+| **RK / 狼蛛 / VGN / 新盟 / 珂芝 / 瓦尔基里** | RK108 / F75 / F99 / M75 / R75 / S98 / RK100 / RK87 / RK84 / RK68、狼蛛 F75/F87/F99/SC680、V87 / V98 / S99、新盟 X98 / M71、珂芝 K75 / K98 等（Compx 直读 + 电池放电曲线） | 2.4G / 有线 | ✅ RK108 已实测（同方案其他品牌未验证） |
+| **赛技 / 黑爵 / 鲨客 / 多彩** | 赛技 TM015、黑爵与鲨客 R1/X3/X6/X11、多彩 M600 Pro 等（Xenta 异步协议） | 2.4G / 有线 | ✅ 赛技 TM015 已实测（同方案其他品牌未验证） |
+| **造品 / Scyrox / 达尔优** | 造品 Z2 / Z2 Mini、Scyrox V8、达尔优 A950 / A950 Air / A950 Wing、G-Wolves Lycan、Kysona M600 | 2.4G / 有线 | ⚠️ 未实测 |
+| **赛睿 SteelSeries** | Aerox 3/5/9 Wireless、Prime Wireless、Rival 650、Apex Pro 无线键盘、Arctis 7 / 9 / Pro / Nova 系列耳机 | 2.4G / 有线 | ⚠️ 未实测 |
+| **华硕 ASUS ROG / TUF** | 龙鳞 Ace、月刃 Keris、战刃 Gladius III、夜魔 Azoth、魔导士 Falchion、Claymore II 等（支持 Omni 接收器） | 2.4G / 有线 | ⚠️ 未实测 |
+| **美商海盗船 Corsair** | 暗影 Dark Core RGB Pro/SE、卡特 Katar Pro、铁爪 Ironclaw、圣剑 Sabre、K70 PRO Mini、K100 AIR、HS70/80 耳机 | 2.4G / 有线 | ⚠️ 未实测 |
+| **客制化键盘（QMK/VIA）** | Keychron、NuPhy、WOB 雨75、桥75、魔极客 MonsGeek、Hi75 等三模铝坨坨（蓝牙 GATT `0x180F`） | 蓝牙 | ⚠️ 未实测 |
+| **全品牌蓝牙外设** | AirPods / 华为 / 索尼 / 漫步者 / Bose 等蓝牙耳机，小米双模 / 罗技 Pebble 等蓝牙鼠标，蓝牙键盘、Xbox 蓝牙手柄 | 蓝牙 | ✅ P6 耳机已实测（其余设备未逐一验证） |
+| **标准 HID 电池规范** | 符合 Windows HID Power / Battery System（`0x0084` / `0x0085`）的第三方外设 | 2.4G / 有线 | ⚠️ 未实测 |
+
+> **实机验证说明**：✅ 表示已在本机真实硬件上读到并核对电量；⚠️ 未实测表示协议依据公开规范或开源实现编写，尚未用对应硬件验证，可能因固件版本、接收器批次或报告描述符差异失效；⚠️ 待复测表示曾实测失败并已修复，但未收到复测回执。未实测协议不构成可用性承诺，实机结果欢迎通过 `--scan-all` 反馈。
 
 > 各协议的报文格式、VID/PID 覆盖范围与探测机制见 [技术文档 · 协议适配矩阵](docs/TECHNICAL.md#3-协议适配矩阵)。
 

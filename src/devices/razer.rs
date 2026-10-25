@@ -3,6 +3,7 @@
 //! 协议类型: Razer HyperSpeed 2.4G 无线 / USB 有线专有协议
 //! 通信机制: OpenRazer 90字节 Class 0x07 标准双向报文 (CMD 0x80 电量 / CMD 0x84 充电)
 //! 代表设备: 毒蝰 (Viper) 系列、炼狱蝰蛇 (DeathAdder) 系列、巴塞利斯蛇 (Basilisk) 系列、眼镜蛇 (Cobra Pro) 等
+//! 实机验证: 未实测 — 按 OpenRazer 公开报文实现，待对应硬件验证
 //! ==============================================================================
 
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};

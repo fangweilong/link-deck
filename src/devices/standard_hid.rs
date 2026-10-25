@@ -3,6 +3,7 @@
 //! 协议类型: USB HID 官方标准电源外设规范
 //! 通信机制: UsagePage 0x0084 (Power Device) 与 UsagePage 0x0085 (Battery System)
 //! 代表设备: 遵循 USB 官方标准 HID 电池描述符规范的第三方有线/无线外设
+//! 实机验证: 未实测 — 按 USB-IF 规范实现，待对应硬件验证
 //! ==============================================================================
 
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice};

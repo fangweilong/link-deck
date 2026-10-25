@@ -3,6 +3,7 @@
 //! 协议类型: Corsair Slipstream 2.4G / Bragi 统一协议与 NXP Legacy 协议
 //! 通信机制: Bragi Magic 0x08 (Prop 0x0F 千分比电量、Prop 0x10 充放电状态)，NXP 0x0E 报文
 //! 代表设备: 暗影 Dark Core RGB Pro/SE、卡特 Katar Pro/Elite、铁爪 Ironclaw、圣剑 Sabre、K70 PRO Mini、K100 AIR、HS70/80 耳机等
+//! 实机验证: 未实测 — 按公开协议资料实现，待对应硬件验证
 //! ==============================================================================
 
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};

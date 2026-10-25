@@ -750,7 +750,7 @@ unsafe extern "system" fn panel_wnd_proc(
                     } else {
                         (
                             "未检测到已适配的 2.4G 外设或在线蓝牙设备",
-                            "已适配: 罗技/雷蛇全系 · RK/狼蛛键盘 · 迈从/VXE/达尔优鼠标 · 赛技 · 全系蓝牙\n提示: 多模外设切至蓝牙模式可直接读取；可在终端运行 --protocols 查看完整清单",
+                            "已适配: 罗技/雷蛇全系 · RK/狼蛛键盘 · 迈从/VXE/达尔优鼠标 · 赛技 · 全系蓝牙\n注意: 标注未实测的私有协议尚未用真实硬件验证，运行 --protocols 查看\n提示: 多模外设切至蓝牙模式可直接读取",
                         )
                     };
                     SetTextColor(mem_dc, CLR_TEXT);
@@ -1255,7 +1255,7 @@ unsafe fn dispatch_settings_click(hwnd: HWND, host: HWND, id: i32) {
             s.toast_critical = match s.toast_critical { 5 => 10, 10 => 15, _ => 5 };
         }),
         80 => crate::ui::toast::ToastNotification::show(
-            "罗技 M720 Triathlon",
+            "罗技 MX Master 3S",
             "电量已降至 28% (警告通知测试)",
             crate::ui::toast::ToastLevel::Warning,
             28,

@@ -3,6 +3,7 @@
 //! 协议类型: Bluetooth Low Energy (BLE) GATT Battery Service 规范
 //! 通信机制: DEVPKEY_Device_BatteryLevel ({104EA319-6EE2-4701-BD47-8DDBF425BBE5}, 2)
 //! 代表设备: HHKB、Leopold、Filco 圣手三代、Keychron (蓝牙模式)、AirPods、Sony耳机、Xbox手柄等
+//! 实机验证: 已实测 — 蓝牙耳机 P6（Windows PnP 电量）；其余蓝牙设备未逐一验证
 //! ==============================================================================
 
 use crate::devices::types::{BatteryState, ConnectionMode, DeviceKind, DeviceSnapshot};

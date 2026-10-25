@@ -40,21 +40,23 @@
 
 ## 3. 协议适配矩阵
 
-| 设备厂家 / 品牌 | 底层主控芯片方案 | 适配协议与代际版本 | 典型支持型号示例 | 连接模式 |
-| :--- | :--- | :--- | :--- | :--- |
-| **罗技 Logitech** | Logitech 原厂无线方案 | **HID++ 2.0 / 4.0** (Unified Battery `0x1004` / Battery Status `0x1000`)<br>**HID++ 1.0** (Register `0x07` 兼容模式)<br>支持 Unifying 优联 1~6 全槽位及 Bolt / Lightspeed 接收器 | **GPW 狗屁王 1/2/3 代**、**G502 Lightspeed**、**G304**、**M720 Triathlon**、**G903**、**G913/G915 键盘**、**MX Master 3/3S** 全系 | 2.4G 无线 / USB 有线 |
-| **雷蛇 Razer** | Razer Hyperspeed 无线方案 | **OpenRazer 标准通信体系** (90 字节 Class `0x07` 报文)<br>`CMD 0x80` (电量查询) / `CMD 0x84` (充电指示)，支持 TxID `0x1F` / `0x3F` | **毒蝰 Viper V2 Pro / V3 Pro / Ultimate**、**炼狱蝰蛇 DeathAdder V2/V3 Pro / HyperSpeed**、**巴塞利斯蛇 Basilisk 全系**、**眼镜蛇 Cobra Pro**、**那伽梵蛇**、**八岐大蛇** 等 | 2.4G 无线 / USB 有线 |
-| **VXE / VGN / ATK** | Nordic nRF52840<br>Nordic nRF54L15 (8K) | **双代协议全支持**：<br>1. **一代 Nordic 52840 协议** (17 字节 Report `0x08` `0x04`)<br>2. **二代 Nordic 54L15 协议** (64 字节 Report `0x08` `0x72` `0x07` 8K接收器)<br>涵盖 VID `0x373B` / `0x3554` / `0x24AE` | **VXE 蜻蜓 R1 全系** (SE+/Pro/Pro Max)<br>**VXE MAD R / MAD R Major Plus**<br>**VGN 蜻蜓 F1 全系** (F1/Pro/MOBA)<br>**VGN 蜻蜓 F2 系列** (F2 Pro Max/Master+)<br>**ATK F1 / A9 系列**、**ATK Zero 8K 旗舰系列** | 2.4G 无线 / USB 有线 |
-| **迈从 MCHOSE** | MCHOSE 原厂主控方案 | **双代协议全支持**：<br>1. **一代 Legacy 协议** (Feature Report `0x11` 指令 `0x06`，`XOR 0xFF` 双向掩码)<br>2. **二代 Modern 协议** (Report `0x4D` 64字节 Command `0x0900`)<br>涵盖 VID `0x3837` / `0x5253` / `0x2023` | **迈从 A5 / A5 Pro / A5 Pro Max**、**AX5 / AX5 Pro**、**A5 V3 Pro / A5 V3 Ultra+**、**G3 全系**、**A7 / A7 Ultra / A7 V3**、**L7 / M7 / K7 系列** 等 | 2.4G 无线 / USB 有线 |
-| **RK / 狼蛛 / VGN 等键盘** | Compx 键盘方案<br>SinoWealth 中颖方案<br>Sonix 松翰方案 | **Compx 0xFF02 硬件直读协议** (Report ID `0x06` / `0x13`)<br>涵盖 `0x25A7` / `0x3554` / `0x258A` / `0x0C45` / `0x2F24` / `0x320F` / `0x341A` 等全批次 VID | **RK (Royal Kludge) 全系** (RK108 / F75 / F99 / M75 / R75 / S98 / RK100 / RK87 / RK84 / RK68 等)<br>**狼蛛 AULA 全系** (F75 / F87 / F99 / SC680 等接收器 `3554:FA09`)<br>**VGN / VXE 键盘全系** (V87 / V98 / S99 / VXE75 / N75)<br>**新盟 Xinmeng** (X98 / M71 / A66)、**珂芝 KZZI** (K75 / K98)、**瓦尔基里** 等 | 2.4G 无线 / USB 有线 |
-| **赛技 / 黑爵 / 鲨客 / 多彩** | Beken / Xenta / Areson 方案 | **Xenta 异步通信协议** (`UsagePage 0x000A, Report 0x03`)<br>COL04 唤醒探针 + COL03 捕获 `Report 0x03 0x4010`<br>涵盖 `0x1D57` / `0x24AE` / `0x093A` / `0x25A7` | **赛技 Saiggi** (TM015)<br>**黑爵 Ajazz / 鲨客 Attack Shark** (R1 / X3 / X6 / X11 等)<br>**多彩 Delux** (M600 Pro 等) | 2.4G 无线 / USB 有线 |
-| **造品 / Scyrox / 达尔优** | Compx 方案公版鼠标 | **Compx 17 字节协议** (`UsagePage 0xFF02, Report 0x08 0x04`) | **Zaopin 造品 Z2 / Z2 Mini**<br>**Scyrox V8**<br>**达尔优 DAREU A950 / A950 Air / A950 Wing**<br>**G-Wolves Lycan**、**Kysona M600** | 2.4G 无线 / USB 有线 |
-| **赛睿 SteelSeries** | SteelSeries 专有无线方案 | **专有报文指令**：`0xD2` / `0x92` 鼠标电量、`0xAA` (Rival 650)、`0x0618` (Arctis 耳机) | **Aerox 3/5/9 Wireless**、**Prime Wireless**、**Rival 650**、**Apex Pro 无线键盘**、**Arctis 7 / 9 / Pro / Nova 系列** | 2.4G 无线 / USB 有线 |
-| **华硕 ASUS ROG / TUF** | ROG 原厂主控 + Omni 接收器 | **ROG 专有 64 字节 Feature Report**：`0x1207` 鼠标电量、`0x1201` 键盘电量 | **龙鳞 Ace**、**月刃 Keris**、**战刃 Gladius III**、**夜魔 Azoth**、**魔导士 Falchion**、**Claymore II** | 2.4G 无线 / USB 有线 |
-| **美商海盗船 Corsair** | Corsair Slipstream / Bragi + NXP 通道 | **Corsair Bragi 统一协议**：Magic `0x08`，Prop `0x0F` 电量千分比 / `0x10` 充电状态 | **暗影 Dark Core RGB Pro/SE**、**卡特 Katar Pro/Elite**、**铁爪 Ironclaw**、**圣剑 Sabre**、**K70 PRO Mini**、**K100 AIR**、**HS70/80 耳机** | 2.4G 无线 / USB 有线 |
-| **客制化键盘 (QMK/VIA)** | QMK / VIAL / 自研固件 | **Windows 原生蓝牙 GATT 规范**<br>Bluetooth SIG 统一 Battery Service (`0x180F`) | **Keychron (渴创)**、**NuPhy**、**WOB 雨75 (Rainy75)**、**桥75 (Bridge75)**、**魔极客 MonsGeek**、**Hi75** 等铝坨坨三模客制化键盘 | 蓝牙无线模式 |
-| **全品牌通用蓝牙外设** | 任何蓝牙 4.0+ 芯片 | **Windows 内核级 PnP 蓝牙服务** (`DEVPKEY_Device_BatteryLevel`)<br>结合 `DEVPKEY_Device_IsConnected` 严格剔除已断开的历史死缓存 | 任何品牌的无线蓝牙耳机 (AirPods / 华为 / 索尼 / 漫步者 / Bose 等)、蓝牙鼠标 (小米双模 / 罗技Pebble等)、蓝牙键盘、Xbox 蓝牙无线手柄等 | 蓝牙无线模式 |
-| **通用标准 HID 规范** | 标准 USB HID 协议 | **Windows HID Power / Battery System 规范**<br>`UsagePage 0x0084` (Power Device) / `0x0085` (Battery System) | 符合微软 Windows 官方标准 HID 电池规范的第三方外设 | 2.4G 无线 / USB 有线 |
+| 设备厂家 / 品牌 | 底层主控芯片方案 | 适配协议与代际版本 | 典型支持型号示例 | 连接模式 | 实机验证 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **罗技 Logitech** | Logitech 原厂无线方案 | **HID++ 2.0 / 4.0** (Unified Battery `0x1004` / Battery Status `0x1000`)<br>**HID++ 1.0** (Register `0x07` 兼容模式)<br>支持 Unifying 优联 1~6 全槽位及 Bolt / Lightspeed 接收器 | **GPW 狗屁王 1/2/3 代**、**G502 Lightspeed**、**G304**、**G903**、**G913/G915 键盘**、**MX Master 3/3S** 全系 | 2.4G 无线 / USB 有线 | ✅ MX Master 3S 已实测 |
+| **雷蛇 Razer** | Razer Hyperspeed 无线方案 | **OpenRazer 标准通信体系** (90 字节 Class `0x07` 报文)<br>`CMD 0x80` (电量查询) / `CMD 0x84` (充电指示)，支持 TxID `0x1F` / `0x3F` | **毒蝰 Viper V2 Pro / V3 Pro / Ultimate**、**炼狱蝰蛇 DeathAdder V2/V3 Pro / HyperSpeed**、**巴塞利斯蛇 Basilisk 全系**、**眼镜蛇 Cobra Pro**、**那伽梵蛇**、**八岐大蛇** 等 | 2.4G 无线 / USB 有线 | ⚠️ 未实测 |
+| **VXE / VGN / ATK** | Nordic nRF52840<br>Nordic nRF54L15 (8K) | **双代协议全支持**：<br>1. **一代 Nordic 52840 协议** (17 字节 Report `0x08` `0x04`)<br>2. **二代 Nordic 54L15 协议** (64 字节 Report `0x08` `0x72` `0x07` 8K接收器)<br>涵盖 VID `0x373B` / `0x3554` / `0x24AE` | **VXE 蜻蜓 R1 全系** (SE+/Pro/Pro Max)<br>**VXE MAD R / MAD R Major Plus**<br>**VGN 蜻蜓 F1 全系** (F1/Pro/MOBA)<br>**VGN 蜻蜓 F2 系列** (F2 Pro Max/Master+)<br>**ATK F1 / A9 系列**、**ATK Zero 8K 旗舰系列** | 2.4G 无线 / USB 有线 | ✅ VGN 蜻蜓 F1 Pro Max 已实测（其余型号/品牌未验证） |
+| **迈从 MCHOSE** | MCHOSE 原厂主控方案 | **双代协议全支持**：<br>1. **一代 Legacy 协议** (Feature Report `0x11` 指令 `0x06`，`XOR 0xFF` 双向掩码)<br>2. **二代 Modern 协议** (Report `0x4D` 64字节 Command `0x0900`)<br>涵盖 VID `0x3837` / `0x5253` / `0x2023` | **迈从 A5 / A5 Pro / A5 Pro Max**、**AX5 / AX5 Pro**、**A5 V3 Pro / A5 V3 Ultra+**、**G3 全系**、**A7 / A7 Ultra / A7 V3**、**L7 / M7 / K7 系列** 等 | 2.4G 无线 / USB 有线 | ⚠️ 未实测 |
+| **RK / 狼蛛 / VGN 等键盘** | Compx 键盘方案<br>SinoWealth 中颖方案<br>Sonix 松翰方案 | **Compx 0xFF02 硬件直读协议** (Report ID `0x06` / `0x13`)<br>涵盖 `0x25A7` / `0x3554` / `0x258A` / `0x0C45` / `0x2F24` / `0x320F` / `0x341A` 等全批次 VID | **RK (Royal Kludge) 全系** (RK108 / F75 / F99 / M75 / R75 / S98 / RK100 / RK87 / RK84 / RK68 等)<br>**狼蛛 AULA 全系** (F75 / F87 / F99 / SC680 等接收器 `3554:FA09`)<br>**VGN / VXE 键盘全系** (V87 / V98 / S99 / VXE75 / N75)<br>**新盟 Xinmeng** (X98 / M71 / A66)、**珂芝 KZZI** (K75 / K98)、**瓦尔基里** 等 | 2.4G 无线 / USB 有线 | ✅ RK108 已实测（2.4G `25A7:FA70` / 有线 `258A:00A1`；同方案其他品牌未验证） |
+| **赛技 / 黑爵 / 鲨客 / 多彩** | Beken / Xenta / Areson 方案 | **Xenta 异步通信协议** (`UsagePage 0x000A, Report 0x03`)<br>COL04 唤醒探针 + COL03 捕获 `Report 0x03 0x4010`<br>涵盖 `0x1D57` / `0x24AE` / `0x093A` / `0x25A7` | **赛技 Saiggi** (TM015)<br>**黑爵 Ajazz / 鲨客 Attack Shark** (R1 / X3 / X6 / X11 等)<br>**多彩 Delux** (M600 Pro 等) | 2.4G 无线 / USB 有线 | ✅ 赛技 TM015 已实测（2.4G `1D57:FA60` / 有线 `1D57:FA61`；同方案其他品牌未验证） |
+| **造品 / Scyrox / 达尔优** | Compx 方案公版鼠标 | **Compx 17 字节协议** (`UsagePage 0xFF02, Report 0x08 0x04`) | **Zaopin 造品 Z2 / Z2 Mini**<br>**Scyrox V8**<br>**达尔优 DAREU A950 / A950 Air / A950 Wing**<br>**G-Wolves Lycan**、**Kysona M600** | 2.4G 无线 / USB 有线 | ⚠️ 未实测 |
+| **赛睿 SteelSeries** | SteelSeries 专有无线方案 | **专有报文指令**：`0xD2` / `0x92` 鼠标电量、`0xAA` (Rival 650)、`0x0618` (Arctis 耳机) | **Aerox 3/5/9 Wireless**、**Prime Wireless**、**Rival 650**、**Apex Pro 无线键盘**、**Arctis 7 / 9 / Pro / Nova 系列** | 2.4G 无线 / USB 有线 | ⚠️ 未实测 |
+| **华硕 ASUS ROG / TUF** | ROG 原厂主控 + Omni 接收器 | **ROG 专有 64 字节 Feature Report**：`0x1207` 鼠标电量、`0x1201` 键盘电量 | **龙鳞 Ace**、**月刃 Keris**、**战刃 Gladius III**、**夜魔 Azoth**、**魔导士 Falchion**、**Claymore II** | 2.4G 无线 / USB 有线 | ⚠️ 未实测 |
+| **美商海盗船 Corsair** | Corsair Slipstream / Bragi + NXP 通道 | **Corsair Bragi 统一协议**：Magic `0x08`，Prop `0x0F` 电量千分比 / `0x10` 充电状态 | **暗影 Dark Core RGB Pro/SE**、**卡特 Katar Pro/Elite**、**铁爪 Ironclaw**、**圣剑 Sabre**、**K70 PRO Mini**、**K100 AIR**、**HS70/80 耳机** | 2.4G 无线 / USB 有线 | ⚠️ 未实测 |
+| **客制化键盘 (QMK/VIA)** | QMK / VIAL / 自研固件 | **Windows 原生蓝牙 GATT 规范**<br>Bluetooth SIG 统一 Battery Service (`0x180F`) | **Keychron (渴创)**、**NuPhy**、**WOB 雨75 (Rainy75)**、**桥75 (Bridge75)**、**魔极客 MonsGeek**、**Hi75** 等铝坨坨三模客制化键盘 | 蓝牙无线模式 | ⚠️ 未实测 |
+| **全品牌通用蓝牙外设** | 任何蓝牙 4.0+ 芯片 | **Windows 内核级 PnP 蓝牙服务** (`DEVPKEY_Device_BatteryLevel`)<br>结合 `DEVPKEY_Device_IsConnected` 严格剔除已断开的历史死缓存 | 任何品牌的无线蓝牙耳机 (AirPods / 华为 / 索尼 / 漫步者 / Bose 等)、蓝牙鼠标 (小米双模 / 罗技Pebble等)、蓝牙键盘、Xbox 蓝牙无线手柄等 | 蓝牙无线模式 | ✅ P6 耳机已实测（其余设备未逐一验证） |
+| **通用标准 HID 规范** | 标准 USB HID 协议 | **Windows HID Power / Battery System 规范**<br>`UsagePage 0x0084` (Power Device) / `0x0085` (Battery System) | 符合微软 Windows 官方标准 HID 电池规范的第三方外设 | 2.4G 无线 / USB 有线 | ⚠️ 未实测 |
+
+> **实机验证状态说明**：✅ 表示已在本机真实硬件上读到并核对电量；⚠️ 未实测表示协议依据公开规范或开源实现编写，尚未用对应硬件验证，可能因固件版本、接收器批次或报告描述符差异失效；⚠️ 待复测表示曾实测失败并已修复，但未收到复测回执。未实测协议不构成可用性承诺。
 
 ---
 
@@ -67,7 +69,7 @@
   - 遍历优联 / Bolt 接收器的全部 **1~6 号配对槽位**（`dev_idx: 1..=6`）以及直接有线设备（`0xFF`）；
   - 构造请求帧第 3 字节携带专用 `HIDPP_SW_ID = 0x05`，接收器百分百正确回执；
   - 先查询 Root Feature `0x0000` 并解析 `0x1004` (Unified Battery)；
-  - 若设备为干电池型号（如 **M720 Triathlon**），自动 Fallback 至 `0x1000` (Battery Status)，提取当前放电档位百分比；老款设备无缝回退 HID++ 1.0 寄存器 `0x07`；
+  - 若设备不支持 `0x1004`（老款或部分干电池型号），自动 Fallback 至 `0x1000` (Battery Status)，提取当前放电档位百分比；老款设备无缝回退 HID++ 1.0 寄存器 `0x07`；
   - 支持通过 Feature `0x0005` (DeviceName) 直接向硬件固件读取原生设备全名。
 
 ### 4.2 雷蛇 Razer Hyperspeed 全系无线电竞鼠标

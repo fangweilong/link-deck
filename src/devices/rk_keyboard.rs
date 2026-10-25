@@ -3,6 +3,7 @@
 //! 协议类型: Compx 方案无线接收器与 USB 有线硬件报文
 //! 通信机制: UsagePage 0xFF02 Report 0x06 (硬件毫伏电压直读与平滑放电曲线百分比换算)
 //! 代表设备: RK108、F75、F99、M75、R75、S98、RK100、RK87、RK84、RK68 等全系键盘
+//! 实机验证: 已实测 — RK108（2.4G 0x25A7:0xFA70 / 有线 0x258A:0x00A1）；同方案其他品牌未验证
 //! ==============================================================================
 
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};
