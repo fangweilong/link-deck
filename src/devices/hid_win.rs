@@ -315,6 +315,59 @@ impl HidDevice {
         }
     }
 
+    /// 在 overlapped 句柄上写入报文并限时等待完成。
+    ///
+    /// 部分接收器（如 GANSS 2.4G）的同步 WriteFile 会永久阻塞，必须走
+    /// FILE_FLAG_OVERLAPPED + 事件等待，超时后用 CancelIo 收尾。
+    pub fn write_overlapped(&self, buf: &[u8], timeout: Duration) -> Result<usize, String> {
+        unsafe {
+            let event = CreateEventW(ptr::null(), 1, 0, ptr::null());
+            if event.is_null() {
+                return Err("Failed to create event".into());
+            }
+
+            let mut ov: OVERLAPPED = mem::zeroed();
+            ov.hEvent = event;
+
+            let mut bytes_written = 0u32;
+            let ok = WriteFile(
+                self.handle,
+                buf.as_ptr(),
+                buf.len() as u32,
+                &mut bytes_written,
+                &mut ov,
+            );
+
+            if ok == 0 {
+                let err = GetLastError();
+                if err != ERROR_IO_PENDING {
+                    CloseHandle(event);
+                    return Err(format!("WriteFile failed: {}", err));
+                }
+
+                let wait_res = WaitForSingleObject(event, timeout.as_millis() as u32);
+                if wait_res == WAIT_OBJECT_0 {
+                    let mut transferred = 0u32;
+                    let got = GetOverlappedResult(self.handle, &ov, &mut transferred, 0);
+                    CloseHandle(event);
+                    if got != 0 {
+                        Ok(transferred as usize)
+                    } else {
+                        Err(format!("GetOverlappedResult failed: {}", GetLastError()))
+                    }
+                } else {
+                    CancelIo(self.handle);
+                    ResetEvent(event);
+                    CloseHandle(event);
+                    Err("Timed out writing HID report".into())
+                }
+            } else {
+                CloseHandle(event);
+                Ok(bytes_written as usize)
+            }
+        }
+    }
+
     pub fn read_overlapped(&self, buf: &mut [u8], timeout: Duration) -> Result<usize, String> {
         unsafe {
             let event = CreateEventW(ptr::null(), 1, 0, ptr::null());

@@ -66,7 +66,8 @@
 | **雷蛇 Razer** | Razer Hyperspeed 无线方案 | **OpenRazer 标准通信体系** (90 字节 Class `0x07` 报文)<br>`CMD 0x80` (电量查询) / `CMD 0x84` (充电指示)，支持 TxID `0x1F` / `0x3F` | **毒蝰 Viper V2 Pro / V3 Pro / Ultimate**、**炼狱蝰蛇 DeathAdder V2/V3 Pro / HyperSpeed**、**巴塞利斯蛇 Basilisk 全系**、**眼镜蛇 Cobra Pro**、**那伽梵蛇**、**八岐大蛇** 等 | 2.4G 无线 / USB 有线 | ⚠️ 未实测 |
 | **VXE / VGN / ATK** | Nordic nRF52840<br>Nordic nRF54L15 (8K) | **双代协议全支持**：<br>1. **一代 Nordic 52840 协议** (17 字节 Report `0x08` `0x04`)<br>2. **二代 Nordic 54L15 协议** (64 字节 Report `0x08` `0x72` `0x07` 8K接收器)<br>涵盖 VID `0x373B` / `0x3554` / `0x24AE` | **VXE 蜻蜓 R1 全系** (SE+/Pro/Pro Max)<br>**VXE MAD R / MAD R Major Plus**<br>**VGN 蜻蜓 F1 全系** (F1/Pro/MOBA)<br>**VGN 蜻蜓 F2 系列** (F2 Pro Max/Master+)<br>**ATK F1 / A9 系列**、**ATK Zero 8K 旗舰系列** | 2.4G 无线 / USB 有线 | ✅ VGN 蜻蜓 F1 Pro Max 已实测（其余型号/品牌未验证） |
 | **迈从 MCHOSE** | MCHOSE 原厂主控方案 | **双代协议全支持**：<br>1. **一代 Legacy 协议** (Feature Report `0x11` 指令 `0x06`，`XOR 0xFF` 双向掩码)<br>2. **二代 Modern 协议** (Report `0x4D` 64字节 Command `0x0900`)<br>涵盖 VID `0x3837` / `0x5253` / `0x2023` | **迈从 A5 / A5 Pro / A5 Pro Max**、**AX5 / AX5 Pro**、**A5 V3 Pro / A5 V3 Ultra+**、**G3 全系**、**A7 / A7 Ultra / A7 V3**、**L7 / M7 / K7 系列** 等 | 2.4G 无线 / USB 有线 | ⚠️ 未实测 |
-| **RK / 狼蛛 / VGN 等键盘** | Compx 键盘方案<br>SinoWealth 中颖方案<br>Sonix 松翰方案 | **Compx 0xFF02 硬件直读协议** (Report ID `0x06` / `0x13`)<br>涵盖 `0x25A7` / `0x3554` / `0x258A` / `0x0C45` / `0x2F24` / `0x320F` / `0x341A` 等全批次 VID | **RK (Royal Kludge) 全系** (RK108 / F75 / F99 / M75 / R75 / S98 / RK100 / RK87 / RK84 / RK68 等)<br>**狼蛛 AULA 全系** (F75 / F87 / F99 / SC680 等接收器 `3554:FA09`)<br>**VGN / VXE 键盘全系** (V87 / V98 / S99 / VXE75 / N75)<br>**新盟 Xinmeng** (X98 / M71 / A66)、**珂芝 KZZI** (K75 / K98)、**瓦尔基里** 等 | 2.4G 无线 / USB 有线 | ✅ RK108 已实测（2.4G `25A7:FA70` / 有线 `258A:00A1`；同方案其他品牌未验证） |
+| **GANSS 迦斯** | GANSS 私有无线方案 | **33 字节 HID Output/Input 报文** (`UsagePage 0xFF60, Usage 0x61`)：Output 命令 `0x20` 查询电量，Input 回读 `<状态> <电量>` | **GS3108T-PRO** | 2.4G 无线 | ✅ GS3108T-PRO 已实测（休眠时接收器不转发命令） |
+| **RK / 狼蛛 / VGN 等键盘** | Compx 键盘方案<br>SinoWealth 中颖方案<br>Sonix 松翰方案 | **Compx 0xFF02 协议** (Feature `0x06`，静态回显缓冲，2.4G 无实时电量)<br>涵盖 `0x25A7` / `0x3554` / `0x258A` / `0x0C45` / `0x2F24` / `0x320F` / `0x341A` 等全批次 VID | **RK (Royal Kludge) 全系** (RK108 / F75 / F99 / M75 / R75 / S98 / RK100 / RK87 / RK84 / RK68 等)<br>**狼蛛 AULA 全系** (F75 / F87 / F99 / SC680 等接收器 `3554:FA09`)<br>**VGN / VXE 键盘全系** (V87 / V98 / S99 / VXE75 / N75)<br>**新盟 Xinmeng** (X98 / M71 / A66)、**珂芝 KZZI** (K75 / K98)、**瓦尔基里** 等 | 2.4G 无线 / USB 有线 | ✅ RK108 已实测（2.4G `25A7:FA70` / 有线 `258A:00A1`；2.4G 电量不可读；同方案其他品牌未验证） |
 | **赛技 / 黑爵 / 鲨客 / 多彩** | Beken / Xenta / Areson 方案 | **Xenta 异步通信协议** (`UsagePage 0x000A, Report 0x03`)<br>COL04 唤醒探针 + COL03 捕获 `Report 0x03 0x4010`<br>涵盖 `0x1D57` / `0x24AE` / `0x093A` / `0x25A7` | **赛技 Saiggi** (TM015)<br>**黑爵 Ajazz / 鲨客 Attack Shark** (R1 / X3 / X6 / X11 等)<br>**多彩 Delux** (M600 Pro 等) | 2.4G 无线 / USB 有线 | ✅ 赛技 TM015 已实测（2.4G `1D57:FA60` / 有线 `1D57:FA61`；同方案其他品牌未验证） |
 | **造品 / Scyrox / 达尔优** | Compx 方案公版鼠标 | **Compx 17 字节协议** (`UsagePage 0xFF02, Report 0x08 0x04`) | **Zaopin 造品 Z2 / Z2 Mini**<br>**Scyrox V8**<br>**达尔优 DAREU A950 / A950 Air / A950 Wing**<br>**G-Wolves Lycan**、**Kysona M600** | 2.4G 无线 / USB 有线 | ⚠️ 未实测 |
 | **赛睿 SteelSeries** | SteelSeries 专有无线方案 | **专有报文指令**：`0xD2` / `0x92` 鼠标电量、`0xAA` (Rival 650)、`0x0618` (Arctis 耳机) | **Aerox 3/5/9 Wireless**、**Prime Wireless**、**Rival 650**、**Apex Pro 无线键盘**、**Arctis 7 / 9 / Pro / Nova 系列** | 2.4G 无线 / USB 有线 | ⚠️ 未实测 |
@@ -117,9 +118,10 @@
 
 ### 4.5 RK / 狼蛛 / VGN / 珂芝 / 新盟 三模机械键盘
 
-- **协议实现**：Compx 接收器 `UsagePage 0xFF02, Usage 0x0002` + Report `0x13`。
+- **协议实现**：Compx 接收器 `UsagePage 0xFF02, Usage 0x0002` + Feature Report `0x06`。
 - **探测机制**：
-  - 提取高精电压毫伏读数（`voltage_mv`），内置 1S 聚合物锂电池放电曲线换算为 0%~100%；
+  - `0x06` 是静态回显缓冲区：字节 6-7 恒为固件常量 `0x1091`（4241 mV，满电值），按键、唤醒、重插接收器均不刷新，**2.4G 模式拿不到实时电量**；键盘的 LED 电量指示走本地固件，不经过该通道。
+  - 因此 2.4G 路径只标记设备在线，不输出百分比/电压；有线连接按供电状态处理。
   - 全面支持合泰、中颖、松翰及定制主控（VID `0x25A7` / `0x3554` / `0x258A` / `0x0C45` / `0x2F24` / `0x320F` / `0x341A`）。
 
 ### 4.6 赛技 / 黑爵 / 鲨客 / 多彩 双模无线鼠标
@@ -142,7 +144,16 @@
 - **协议实现**：Corsair Bragi 统一协议（Magic `0x08`，Property `0x0F` 电量千分比、`0x10` 充电状态）及 NXP 兼容通道。
 - **典型设备**：暗影 Dark Core RGB Pro/SE、卡特 Katar Pro/Elite、铁爪 Ironclaw、圣剑 Sabre、K70 PRO Mini、K100 AIR、HS70/80 耳机等。
 
-### 4.10 Windows 原生蓝牙设备电量服务（全品牌通用）
+### 4.10 GANSS (迦斯) GS3108T-PRO 三模机械键盘
+
+- **协议实现**：`UsagePage 0xFF60, Usage 0x61`，33 字节 Output/Input 报文（首字节为 Report ID `0x00`）。
+- **探测机制**：
+  - 写入 `00 20 00 ... 00`（命令 `0x20`），设备回读 `00 20 <状态> 00 <电量> ... <校验和>`；
+  - 第 5 字节为电量百分比（实测 `0x60` = 96%），末字节为前 32 字节之和的低 8 位；
+  - 深度休眠时接收器不转发命令，只能收到全零空闲报告，此时标记待机并保留上次读数。
+  - 字节 3 的含义尚未确认（官方驱动读取时为 `0x01`，独立查询为 `0x00`），暂不据此判定充电状态。
+
+### 4.11 Windows 原生蓝牙设备电量服务（全品牌通用）
 
 - **协议实现**：Win32 PnP 属性引擎直连 Windows 蓝牙内核栈 `DEVPKEY_Device_BatteryLevel`；蓝牙 GATT 外设走 Bluetooth SIG 统一 Battery Service `0x180F`，耳机另结合 HFP。
 - **防幽灵机制**：严谨校验 `DEVPKEY_Device_IsConnected`，严格过滤断开连接的历史残留缓存，杜绝离线幽灵显示。

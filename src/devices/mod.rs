@@ -11,6 +11,7 @@ pub mod steelseries;   // 赛睿 (SteelSeries) 2.4G/有线报文 (Aerox/Prime/Ri
 pub mod asus_rog;      // 华硕 (ASUS ROG / TUF) 64字节奥创报文 (龙鳞/月刃/战刃/夜魔/魔导士)
 pub mod corsair;       // 美商海盗船 (Corsair) Slipstream / Bragi 统一协议 (Dark Core/Katar/K70/K100)
 pub mod rk_keyboard;   // RK (Royal Kludge) / Compx 方案三模客制化机械键盘 (毫伏直读)
+pub mod gs_keyboard;   // GANSS (迦斯) GS3108T-PRO 三模机械键盘 (0xFF60 命令 0x20 电量)
 pub mod saiggi_mouse;  // 赛技 (Saiggi) / Xenta / Areson 双模无线电竞鼠标 (Ping探活与实时捕获)
 pub mod mchose;        // 迈从 (MCHOSE) M-HUB 专有协议 (A5/AX5/G3/A7)
 pub mod vxe;           // VXE / VGN / ATK / 达尔优 / 造品 / Scyrox 双代 2.4G 协议 (蜻蜓F1/R1/MAD R/Zero)

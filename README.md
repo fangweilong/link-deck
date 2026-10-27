@@ -90,7 +90,8 @@
 | **雷蛇 Razer** | 毒蝰 Viper V2 Pro / V3 Pro / Ultimate、炼狱蝰蛇 V2/V3 Pro、巴塞利斯蛇全系、眼镜蛇 Cobra Pro、那伽梵蛇、八岐大蛇（OpenRazer 报文） | 2.4G / 有线 | ⚠️ 未实测 |
 | **VXE / VGN / ATK** | 蜻蜓 R1 全系、MAD R / MAD R Major+、蜻蜓 F1/F2 系列、ATK F1 / A9 / Zero 8K（双代 Nordic 协议） | 2.4G / 有线 | ✅ VGN 蜻蜓 F1 Pro Max 已实测（其余型号/品牌未验证） |
 | **迈从 MCHOSE** | A5 / A5 Pro / AX5 / A5 V3 / A7 / A7 Ultra / G3 / L7 / M7 / K7 系列（Legacy + Modern 双协议） | 2.4G / 有线 | ⚠️ 未实测 |
-| **RK / 狼蛛 / VGN / 新盟 / 珂芝 / 瓦尔基里** | RK108 / F75 / F99 / M75 / R75 / S98 / RK100 / RK87 / RK84 / RK68、狼蛛 F75/F87/F99/SC680、V87 / V98 / S99、新盟 X98 / M71、珂芝 K75 / K98 等（Compx 直读 + 电池放电曲线） | 2.4G / 有线 | ✅ RK108 已实测（同方案其他品牌未验证） |
+| **GANSS 迦斯** | GS3108T-PRO（`UsagePage 0xFF60` + 33 字节 Output 命令 `0x20`） | 2.4G / 有线 | ✅ GS3108T-PRO 已实测（2.4G；休眠时不可读） |
+| **RK / 狼蛛 / VGN / 新盟 / 珂芝 / 瓦尔基里** | RK108 / F75 / F99 / M75 / R75 / S98 / RK100 / RK87 / RK84 / RK68、狼蛛 F75/F87/F99/SC680、V87 / V98 / S99、新盟 X98 / M71、珂芝 K75 / K98 等（Compx 协议；2.4G 模式不提供实时电量） | 2.4G / 有线 | ✅ RK108 已实测（2.4G 电量不可读，需键盘本地查看；同方案其他品牌未验证） |
 | **赛技 / 黑爵 / 鲨客 / 多彩** | 赛技 TM015、黑爵与鲨客 R1/X3/X6/X11、多彩 M600 Pro 等（Xenta 异步协议） | 2.4G / 有线 | ✅ 赛技 TM015 已实测（同方案其他品牌未验证） |
 | **造品 / Scyrox / 达尔优** | 造品 Z2 / Z2 Mini、Scyrox V8、达尔优 A950 / A950 Air / A950 Wing、G-Wolves Lycan、Kysona M600 | 2.4G / 有线 | ⚠️ 未实测 |
 | **赛睿 SteelSeries** | Aerox 3/5/9 Wireless、Prime Wireless、Rival 650、Apex Pro 无线键盘、Arctis 7 / 9 / Pro / Nova 系列耳机 | 2.4G / 有线 | ⚠️ 未实测 |

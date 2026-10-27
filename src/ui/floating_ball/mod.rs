@@ -399,7 +399,7 @@ pub unsafe fn update_tooltip_for_current_device(state: &BallStateData) {
             .map(|p| format!("{}%", p))
             .unwrap_or_else(|| {
                 if d.battery.online {
-                    "在线".to_string()
+                    "不可读".to_string()
                 } else {
                     "待机省电模式".to_string()
                 }

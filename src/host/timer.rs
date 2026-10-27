@@ -50,7 +50,7 @@ pub(crate) unsafe fn on_timer(_hwnd: HWND, _msg: u32, wparam: WPARAM, _lparam: L
                             format!("{}%", p)
                         }
                     } else if dev.battery.online {
-                        "在线".to_string()
+                        "电量不可读".to_string()
                     } else {
                         "待机".to_string()
                     };

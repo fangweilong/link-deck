@@ -159,7 +159,15 @@ fn main() {
                 .battery
                 .percentage
                 .map(|p| format!("{}%", p))
-                .unwrap_or_else(|| "休眠/待机".to_string());
+                .unwrap_or_else(|| {
+                    if !dev.battery.online {
+                        "休眠/待机".to_string()
+                    } else if dev.kind == crate::devices::types::DeviceKind::Keyboard {
+                        "电量不可读（请在键盘本地查看）".to_string()
+                    } else {
+                        "电量不可读".to_string()
+                    }
+                });
             let mv_text = dev
                 .battery
                 .voltage_mv
@@ -195,7 +203,7 @@ fn main() {
         println!("   - 协议原理: 官方 HID++ 2.0 / 4.0 (Unified Battery 0x1004 / BatteryStatus 0x1000)");
         println!("   - 典型设备: GPW 狗屁王 1/2/3 代、G502 Lightspeed、G304、G903、G913/G915 键盘、MX Master 系列等");
         println!("2. RK / Compx 方案三模机械键盘 (2.4G 无线 / USB 有线)  [已实测: RK108]");
-        println!("   - 协议原理: Compx 接收器 UsagePage 0xFF02 Report 0x06 (硬件毫伏直读)");
+        println!("   - 协议原理: Compx 接收器 UsagePage 0xFF02 Feature 0x06 (静态回显缓冲；2.4G 不提供实时电量)");
         println!("   - 典型设备: RK108、F75、F99、M75、R75、S98、RK100、RK87、RK84、RK68 等全系 Compx 方案键盘");
         println!("3. 迈从 MCHOSE 全系电竞无线鼠标 (2.4G 无线 / 有线)  [未实测]");
         println!("   - 协议原理: M-HUB 专有 Feature Report 0x11 指令 0x06 (XOR 0xFF 掩码通信)");
@@ -226,6 +234,9 @@ fn main() {
         println!("11. Windows 原生蓝牙 GATT 规范 (全品牌通用)  [已实测: P6 耳机]");
         println!("   - 协议原理: Bluetooth SIG 统一 Battery Service 0x180F 及 HFP 音频协议");
         println!("   - 典型设备: 任何品牌走蓝牙连接电脑的鼠标、键盘、无线耳机 (AirPods/Sony等)、手柄");
+        println!("12. GANSS (迦斯) GS3108T-PRO 三模机械键盘 (2.4G 无线)  [已实测: GS3108T-PRO]");
+        println!("   - 协议原理: UsagePage 0xFF60 Usage 0x61, 33 字节 Output 命令 0x20 查询电量, Input 应答回读");
+        println!("   - 典型设备: GS3108T-PRO 2.4G 接收器 (05AC:024F MI_03)；键盘休眠时接收器不转发命令");
         println!("{:-<70}", "");
         println!("状态说明:");
         println!("  [已实测]  已在本机真实硬件上读取并核对电量；同方案的其他品牌/型号未逐一验证。");

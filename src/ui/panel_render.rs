@@ -115,7 +115,7 @@ unsafe fn status_of(dev: Option<&DeviceSnapshot>) -> (COLORREF, &'static str, St
         let word = if p >= 50 { "良好" } else if p >= 20 { "偏低" } else { "需充电" };
         (c, word, format!("{}%", p), Some(p))
     } else {
-        (THEME.ok, "在线", "在线".to_string(), None)
+        (THEME.muted, "不可读", "—".to_string(), None)
     }
 }
 

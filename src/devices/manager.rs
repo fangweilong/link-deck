@@ -1,6 +1,7 @@
 use crate::devices::bluetooth::BluetoothBatteryScanner;
 use crate::devices::logitech::LogitechDriver;
 use crate::devices::mchose::MchoseDriver;
+use crate::devices::gs_keyboard::GsKeyboardDriver;
 use crate::devices::rk_keyboard::RkKeyboardDriver;
 use crate::devices::saiggi_mouse::SaiggiMouseDriver;
 use crate::devices::standard_hid::StandardHidBatteryDriver;
@@ -75,11 +76,15 @@ impl DeviceManager {
         let refresh_requested = Arc::clone(&self.refresh_requested);
         let handle = thread::spawn(move || {
             let mut rk = RkKeyboardDriver::new();
+            let mut gs = GsKeyboardDriver::new();
             let mut mouse = SaiggiMouseDriver::new();
 
             // Initial detection
             let mut current = Vec::new();
             for d in rk.detect_all() {
+                push_unique(&mut current, d);
+            }
+            for d in gs.detect_all() {
                 push_unique(&mut current, d);
             }
             if let Some(d) = mouse.detect() {
@@ -118,6 +123,7 @@ impl DeviceManager {
                 // 有线键盘与接收器可能同时存在，每次都完整枚举后合并，
                 // 避免“插了线仍显示 2.4G”这类状态不更新问题。
                 let rk_snaps = rk.detect_all();
+                let gs_snaps = gs.detect_all();
 
                 // Poll Mouse
                 let mouse_bat = mouse.poll_battery();
@@ -141,6 +147,18 @@ impl DeviceManager {
                             || rk_snaps.iter().any(|n| n.id == d.id)
                     });
                     for snap in &rk_snaps {
+                        match list.iter_mut().find(|d| d.id == snap.id) {
+                            Some(existing) => existing.battery = snap.battery.clone(),
+                            None => list.push(snap.clone()),
+                        }
+                    }
+
+                    // 同步 GANSS 键盘（休眠时驱动返回 online=false，保留旧百分比）
+                    list.retain(|d| {
+                        !d.id.starts_with("gs_keyboard")
+                            || gs_snaps.iter().any(|n| n.id == d.id)
+                    });
+                    for snap in &gs_snaps {
                         match list.iter_mut().find(|d| d.id == snap.id) {
                             Some(existing) => existing.battery = snap.battery.clone(),
                             None => list.push(snap.clone()),
@@ -350,10 +368,14 @@ impl DeviceManager {
             }
         } else {
             let mut rk = RkKeyboardDriver::new();
+            let mut gs = GsKeyboardDriver::new();
             let mut mouse = SaiggiMouseDriver::new();
             let mut updated = Vec::new();
 
             for d in rk.detect_all() {
+                push_unique(&mut updated, d);
+            }
+            for d in gs.detect_all() {
                 push_unique(&mut updated, d);
             }
             if let Some(d) = mouse.detect() {

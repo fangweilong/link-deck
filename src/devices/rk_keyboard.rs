@@ -1,9 +1,10 @@
 //! ==============================================================================
 //! 厂商模块: RK (Royal Kludge) / Compx 方案客制化三模机械键盘
 //! 协议类型: Compx 方案无线接收器与 USB 有线硬件报文
-//! 通信机制: UsagePage 0xFF02 Report 0x06 (硬件毫伏电压直读与平滑放电曲线百分比换算)
+//! 通信机制: UsagePage 0xFF02 Report 0x06（静态回显缓冲，2.4G 模式不提供实时电量）
 //! 代表设备: RK108、F75、F99、M75、R75、S98、RK100、RK87、RK84、RK68 等全系键盘
-//! 实机验证: 已实测 — RK108（2.4G 0x25A7:0xFA70 / 有线 0x258A:0x00A1）；同方案其他品牌未验证
+//! 实机验证: 已实测 — RK108（2.4G 0x25A7:0xFA70 / 有线 0x258A:0x00A1）
+//!         2.4G 电量不可读：0x06 的 mV 字段恒为 4241（固件常量），键盘 LED 指示走本地固件
 //! ==============================================================================
 
 use crate::devices::hid_win::{enumerate_hid_devices, HidDevice, HidDeviceInfo};
@@ -221,17 +222,19 @@ impl RkKeyboardDriver {
     }
 
     fn query_battery_internal(&self, dev_info: &HidDeviceInfo) -> BatteryState {
-        // Method A: Compx 8-byte Feature Report (Report ID 6)
-        if dev_info.usage_page == 0xFF02 && dev_info.usage == 0x0002 {
-            if let Ok(dev) = HidDevice::open(dev_info.clone(), false) {
-                let mut buf = [6u8, 0, 0, 0, 0, 0, 0, 0];
-                let _ = dev.set_feature(&buf);
-                if dev.get_feature(&mut buf).is_ok() {
-                    if let Some(state) = parse_rk_feature_report_6(&buf) {
-                        return state;
-                    }
-                }
-            }
+        // Compx 接收器的 0x06 feature 报告是静态回显缓冲区：字节 6-7 恒为固件
+        // 常量 0x1091（4241 mV，满电值），按键、唤醒、重插接收器都不会刷新。
+        // 键盘自身的 LED 电量指示不经过该通道，因此这里不产出百分比或电压，
+        // 只标记在线，避免设备被当作休眠而移出轮播。
+        if dev_info.usage_page == 0xFF02 && dev_info.usage == 0x0002 && dev_info.feature_len < 520 {
+            return BatteryState {
+                percentage: None,
+                voltage_mv: None,
+                charging: false,
+                charging_source: ChargingSource::None,
+                online: true,
+                last_updated: SystemTime::now(),
+            };
         }
 
         // Method B: G5KB 520-byte Feature Report (Command 0x87)
@@ -300,74 +303,9 @@ pub fn lookup_rk_model(pid: u16, hw_name: Option<&str>, default_name: &str) -> S
     }
 }
 
-/// Convert 1S Li-Po / Li-ion battery voltage in millivolts to percentage (0 - 100%)
-pub fn millivolts_to_percent(mv: u16) -> u8 {
-    if mv >= 4200 {
-        100
-    } else if mv >= 4050 {
-        90 + ((mv - 4050) as f32 / 150.0 * 10.0) as u8
-    } else if mv >= 3920 {
-        75 + ((mv - 3920) as f32 / 130.0 * 15.0) as u8
-    } else if mv >= 3800 {
-        50 + ((mv - 3800) as f32 / 120.0 * 25.0) as u8
-    } else if mv >= 3700 {
-        25 + ((mv - 3700) as f32 / 100.0 * 25.0) as u8
-    } else if mv >= 3550 {
-        10 + ((mv - 3550) as f32 / 150.0 * 15.0) as u8
-    } else if mv >= 3400 {
-        ((mv - 3400) as f32 / 150.0 * 10.0) as u8
-    } else {
-        0
-    }
-}
-
-/// Parses the 8-byte Compx feature report 6.
-pub fn parse_rk_feature_report_6(buf: &[u8]) -> Option<BatteryState> {
-    if buf.len() < 8 || buf[0] != 6 {
-        return None;
-    }
-    let mv = (buf[6] as u16) | ((buf[7] as u16) << 8);
-    if !(3000..=4500).contains(&mv) {
-        return None;
-    }
-    let pct = millivolts_to_percent(mv);
-    // In Compx 8-byte report, buf[2] is the device collection index (0x02 = keyboard),
-    // not a charging flag. Battery voltage >= 4200mV is standard resting full voltage.
-    // External charging over 2.4G is indicated by status bytes buf[3] / buf[5].
-    let charging = buf[3] != 0 || buf[5] != 0;
-    Some(BatteryState {
-        percentage: Some(pct),
-        voltage_mv: Some(mv),
-        charging,
-        charging_source: if charging { ChargingSource::Charging } else { ChargingSource::None },
-        online: true,
-        last_updated: SystemTime::now(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_rk_feature_report_6_discharging_full() {
-        // Raw buffer captured from live RK108 2.4G keyboard when fully charged (4241 mV) and unplugged:
-        let buf = [0x06, 0x00, 0x02, 0x00, 0x00, 0x00, 0x91, 0x10];
-        let state = parse_rk_feature_report_6(&buf).expect("should parse");
-        assert_eq!(state.voltage_mv, Some(4241));
-        assert_eq!(state.percentage, Some(100));
-        assert!(!state.charging, "Keyboard must not be marked charging when unplugged");
-        assert_eq!(state.charging_source, ChargingSource::None);
-    }
-
-    #[test]
-    fn test_parse_rk_feature_report_6_charging() {
-        // When charging byte 3 or 5 is non-zero:
-        let buf = [0x06, 0x00, 0x02, 0x01, 0x00, 0x00, 0x91, 0x10];
-        let state = parse_rk_feature_report_6(&buf).expect("should parse");
-        assert!(state.charging, "Keyboard should be marked charging when status flag set");
-        assert_eq!(state.charging_source, ChargingSource::Charging);
-    }
 
     #[test]
     fn test_lookup_rk_model_hw_name_priority() {

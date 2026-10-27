@@ -182,7 +182,7 @@ pub fn row_status(dev: &DeviceSnapshot) -> (COLORREF, String) {
             (color, format!("{}%", p))
         }
     } else if dev.battery.online {
-        (ok, "在线".to_string())
+        (muted, "不可读".to_string())
     } else {
         (muted, "待机".to_string())
     }
@@ -445,7 +445,7 @@ mod tests {
         assert_eq!(c, th.charging);
 
         let (_, t) = row_status(&dev("f", "f", DeviceKind::Headset, None, false, true));
-        assert_eq!(t, "在线");
+        assert_eq!(t, "不可读");
         let (_, t) = row_status(&dev("g", "g", DeviceKind::Headset, None, false, false));
         assert_eq!(t, "待机");
     }
