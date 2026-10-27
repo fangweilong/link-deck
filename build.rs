@@ -103,5 +103,18 @@ fn main() {
 
     if let Err(e) = res.compile() {
         println!("cargo:warning=资源编译失败，exe 将缺少图标与版本号：{e}");
+        return;
+    }
+
+    // GNU 目标下 winres 只输出 `-lresource`：静态库中被引用的资源对象才会
+    // 被链接，而资源对象没有任何被引用的符号，于是整个 .rsrc 段被 ld 丢弃，
+    // exe 的图标和版本信息为空。直接把 resource.o 交给链接器即可保留。
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu") {
+        if let Some(out_dir) = env::var_os("OUT_DIR") {
+            let resource_obj = PathBuf::from(out_dir).join("resource.o");
+            if resource_obj.is_file() {
+                println!("cargo:rustc-link-arg={}", resource_obj.display());
+            }
+        }
     }
 }
