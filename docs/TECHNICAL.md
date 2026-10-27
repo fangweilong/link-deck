@@ -25,7 +25,27 @@
 - 设置页由 `settings::layout()` 产出一份带坐标的卡片树，绘制与命中测试读取同一份结果，杜绝“看得见点不着”。
 - 设备卡片密度分为紧凑/标准/宽松三档，滚动量按密度换算。
 - 悬浮球停靠形态（拉手 `26×64` / 圆球 `48×48`）由用户选择并固定，悬停不再变形，避免两种轮廓差集内反复进出导致闪烁。
-- 展开抽屉（232px 宽，字体缩放后 248/268px）不透明度不低于 232/255，保证文字可读。
+- 展开抽屉不透明度不低于 232/255，保证文字可读；尺寸由 `ui::drawer::size(font_scale)` 给出（宽 232/248/268 随字号，高 204 由 3 行内容反推），hover 与点击走 `drawer::hit_test()`。
+- **抽屉行**：`DrawerRow` 给出行底 / 名称 / 电量文字 / 电量条四个矩形；名称列与电量列不重叠，长名按 12 字截断。行右侧状态色与文案由 `drawer::row_status()` 单一来源给出。
+- **Toast** 尺寸由内容反推（`TOAST_HEIGHT = 留白 + 首行 + 正文 + 电量条 + 留白`），元素坐标取自 `toast::toast_layout()`；左侧 4px 等级色条贯穿全高，徽标 / 标题 / 关闭三者各留 `gap_tight`。
+- 三处布局树共用的矩形基元在 `src/ui/layout.rs`（`Rect2` / `overlaps()` / `to_rect()` / `snap4()`），不各自定义。
+- **设备监控页**由 `ui::dashboard::layout()` 产出带坐标的布局树（`DashLayout`），绘制（`dashboard::paint`）、hover（`hit_test` → `hover_id`）、点击（同一次 `hit_test`）三处读同一份结果；瓦片内的复制 / 改名按钮坐标也由布局给出，`render_device_tile` 不再自己算几何。
+- 顶栏 64 / 底栏 64 / 内容区起点 72。设备以**网格瓦片**排布：列数由窗宽反推（`grid_cols()`，最小瓦片宽 240，1–3 列），瓦片高 120 / 144 / 168（紧凑 / 标准 / 宽松），行步进 = 高度 + `gap_card`。改动密度只需改 `card_geometry()` 与 `tile_spec()`。
+- 滚出裁剪区的瓦片不参与命中测试。
+- 单块瓦片自上而下的信息层级：设备名 → 大号电量（30px 基准）→ 电量条 → 连接/电压；右上角是状态词（良好 / 偏低 / 需充电 / 充电中 / 待机），底部一行是弱化处理的复制 / 改名。选中态用强调色 2px 描边，不再叠一个「已选中」按钮。
+- 设置页同理：`settings::layout()` 产出 `Page`，绘制与命中同源。
+
+### 设计令牌层（`src/ui/theme.rs`）
+
+| 规则 | 说明 |
+| :--- | :--- |
+| 颜色唯一来源 | 界面颜色一律取 `THEME` 字段，禁止再写 `0x00BBGGRR` 字面量 |
+| 只允许 `rgb(r,g,b)` 组装 | COLORREF 是 `0x00BBGGRR`，手写极易反向（`#E08030` 写成 `0x00E08030` 会渲染成蓝色） |
+| 间距唯一来源 | 取 `METRICS`，4 / 8 体系；`gap_card >= pad_card` |
+| 新增一套风格 | `theme.rs` 加一个 `const Theme` → `UiStyle` 加变体 → `palette()` / `label()` / `hint()` 补分支 → 设置页 pill 加一项（id 递增） |
+| 生效时机 | 启动时 `theme::apply(config.ui_style)`；设置页切换即时 `apply()` 并重绘 |
+
+现有五套：`ember` 暖橙（默认）/ `graphite` 冷岩 / `aurora` 极光 / `jade` 竹青 / `snow` 雪原（浅色）。
 
 ---
 
@@ -174,7 +194,7 @@ link-deck.exe --apply-update <path>     # 用指定 exe 替换自身并重启
 | `toast_gaming_suppression` | 全屏/游戏时免打扰 |
 | `enable_low_battery_sound` | 危险阈值语音提示 |
 | `device_filter` / `device_sort` | 设备列表筛选与排序 |
-| `accent_theme` | 强调色主题 |
+| `ui_style` | 界面风格预设（`ember` / `graphite` / `aurora` / `jade` / `snow`），旧值 `orange|blue|purple|green` 自动迁移 |
 | `show_onboarding` | 首次运行引导面板是否显示 |
 | `check_updates` | 自动检查更新 |
 | `auto_start` | 开机自启 |

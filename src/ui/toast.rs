@@ -1,3 +1,7 @@
+#![allow(unsafe_op_in_unsafe_fn, static_mut_refs)]
+
+use crate::ui::layout::{to_rect, Rect2};
+use crate::ui::theme::{METRICS, THEME};
 use std::mem;
 use std::ptr;
 use std::sync::{Arc, Mutex};
@@ -20,17 +24,66 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_PAINT, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
-const TOAST_WIDTH: i32 = 340;
-const TOAST_HEIGHT: i32 = 82;
+/// 内容区左右留白
+const PAD: i32 = 16;
+const PAD_TOP: i32 = 12;
+const PAD_BOTTOM: i32 = 12;
+/// 徽标 / 标题所在的首行
+const HEAD_ROW_H: i32 = 20;
+/// 正文行
+const MSG_H: i32 = 20;
+/// 行与行之间
+const GAP_ROW: i32 = 4;
+/// 底部电量条
+const BAR_H: i32 = 8;
+/// 左侧等级色条（视觉锚点，不计入内容区宽度）
+const ACCENT_W: i32 = 4;
+/// 徽标固定宽度（"⚡ 低电量预警" 最长文本的稳定占位）
+const BADGE_W: i32 = 112;
+/// 右上角关闭指示
+const CLOSE_W: i32 = 18;
 
-const CLR_BG: COLORREF = 0x001B1816; // #16181B dark surface
-const CLR_BORDER: COLORREF = 0x003A322C; // #2C323A border
-const CLR_TEXT: COLORREF = 0x00F4F4F4;
-const CLR_MUTED: COLORREF = 0x00B0A8A0;
+pub const TOAST_WIDTH: i32 = 340;
+/// 高度由内容反推：留白 + 首行 + 正文 + 电量条 + 留白
+pub const TOAST_HEIGHT: i32 =
+    PAD_TOP + HEAD_ROW_H + GAP_ROW + MSG_H + GAP_ROW + BAR_H + PAD_BOTTOM;
 
-const CLR_INFO: COLORREF = 0x00D4B606; // Cyan/Blue
-const CLR_WARNING: COLORREF = 0x000B9EF5; // Orange/Yellow
-const CLR_CRITICAL: COLORREF = 0x004444EF; // Red
+/// Toast 布局树。窗口尺寸固定，但所有元素坐标仍由 `toast_layout()` 统一给出。
+pub struct ToastLayout {
+    pub surface: Rect2,
+    /// 左侧等级色条
+    pub accent: Rect2,
+    pub badge: Rect2,
+    pub title: Rect2,
+    pub close: Rect2,
+    pub message: Rect2,
+    pub bar: Rect2,
+}
+
+pub fn toast_layout(w: i32, h: i32) -> ToastLayout {
+    let surface = Rect2::new(0, 0, w, h);
+    let accent = Rect2::new(0, 0, ACCENT_W, h);
+
+    let badge = Rect2::new(PAD, PAD_TOP, BADGE_W, HEAD_ROW_H);
+    let close = Rect2::new(w - PAD - CLOSE_W, PAD_TOP - 2, CLOSE_W, HEAD_ROW_H + 4);
+    let title = Rect2::new(
+        badge.right() + METRICS.gap_tight,
+        PAD_TOP,
+        close.x - METRICS.gap_tight - (badge.right() + METRICS.gap_tight),
+        HEAD_ROW_H,
+    );
+    let message = Rect2::new(PAD, PAD_TOP + HEAD_ROW_H + GAP_ROW, w - 2 * PAD, MSG_H);
+    let bar = Rect2::new(
+        PAD,
+        PAD_TOP + HEAD_ROW_H + GAP_ROW + MSG_H + GAP_ROW,
+        w - 2 * PAD,
+        BAR_H,
+    );
+
+    ToastLayout { surface, accent, badge, title, close, message, bar }
+}
+
+// 颜色取自设计令牌层（src/ui/theme.rs），本文件不再定义色值。
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastLevel {
@@ -49,10 +102,12 @@ impl ToastLevel {
     }
 
     pub fn color(&self) -> COLORREF {
-        match self {
-            ToastLevel::Info => CLR_INFO,
-            ToastLevel::Warning => CLR_WARNING,
-            ToastLevel::Critical => CLR_CRITICAL,
+        unsafe {
+            match self {
+                ToastLevel::Info => THEME.charging,
+                ToastLevel::Warning => THEME.warn,
+                ToastLevel::Critical => THEME.danger,
+            }
         }
     }
 }
@@ -217,7 +272,7 @@ unsafe extern "system" fn toast_wnd_proc(
             let old_bmp = SelectObject(mem_dc, mem_bmp);
 
             // Background
-            let bg_brush = CreateSolidBrush(CLR_BG);
+            let bg_brush = CreateSolidBrush(THEME.bg);
             FillRect(mem_dc, &rect, bg_brush);
             DeleteObject(bg_brush);
 
@@ -236,102 +291,65 @@ unsafe extern "system" fn toast_wnd_proc(
             };
 
             if let Some((title, message, level, pct)) = data {
-                // Colored left accent bar
+                let lay = toast_layout(w, h);
                 let level_clr = level.color();
-                let bar_brush = CreateSolidBrush(level_clr);
-                let bar_rect = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 4,
-                    bottom: h,
-                };
-                FillRect(mem_dc, &bar_rect, bar_brush);
-                DeleteObject(bar_brush);
 
-                // Rounded outline
-                let pen = CreatePen(PS_SOLID as i32, 1, CLR_BORDER);
+                // 左侧等级色条：一眼区分提示 / 预警 / 危险
+                let accent_brush = CreateSolidBrush(level_clr);
+                let r = to_rect(lay.accent);
+                FillRect(mem_dc, &r, accent_brush);
+                DeleteObject(accent_brush);
+
+                // 外框
+                let pen = CreatePen(PS_SOLID as i32, 1, THEME.border);
                 let old_pen = SelectObject(mem_dc, pen);
                 let null_brush = windows_sys::Win32::Graphics::Gdi::GetStockObject(5); // NULL_BRUSH
                 let old_brush = SelectObject(mem_dc, null_brush);
-                RoundRect(mem_dc, 0, 0, w, h, 8, 8);
+                let sr = to_rect(lay.surface);
+                RoundRect(mem_dc, sr.left, sr.top, sr.right, sr.bottom, METRICS.r_card, METRICS.r_card);
                 SelectObject(mem_dc, old_pen);
                 SelectObject(mem_dc, old_brush);
                 DeleteObject(pen);
 
-                // Badge Text
+                // 徽标
                 let f_badge = create_toast_font(12, true);
                 let old_f = SelectObject(mem_dc, f_badge);
                 SetTextColor(mem_dc, level_clr);
-                let mut b_rect = RECT {
-                    left: 14,
-                    top: 10,
-                    right: 130,
-                    bottom: 28,
-                };
-                draw_str(mem_dc, level.badge_text(), &mut b_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                let mut r = to_rect(lay.badge);
+                draw_str(mem_dc, level.badge_text(), &mut r, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-                // Title (Device Name)
+                // 设备名
                 let f_title = create_toast_font(13, true);
                 SelectObject(mem_dc, f_title);
-                SetTextColor(mem_dc, CLR_TEXT);
-                let mut t_rect = RECT {
-                    left: 135,
-                    top: 10,
-                    right: w - 24,
-                    bottom: 28,
-                };
-                draw_str(mem_dc, &title, &mut t_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                SetTextColor(mem_dc, THEME.text);
+                let mut r = to_rect(lay.title);
+                draw_str(mem_dc, &title, &mut r, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-                // Message Text
+                // 正文
                 let f_msg = create_toast_font(12, false);
                 SelectObject(mem_dc, f_msg);
-                SetTextColor(mem_dc, CLR_MUTED);
-                let mut m_rect = RECT {
-                    left: 14,
-                    top: 32,
-                    right: w - 24,
-                    bottom: 52,
-                };
-                draw_str(mem_dc, &message, &mut m_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                SetTextColor(mem_dc, THEME.muted);
+                let mut r = to_rect(lay.message);
+                draw_str(mem_dc, &message, &mut r, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-                // Mini Progress Bar
-                let bar_w = w - 28;
-                let bar_x = 14;
-                let bar_y = 60;
-                let bar_h = 5;
+                // 电量条：底槽 + 实际电量
+                let bg_brush = CreateSolidBrush(THEME.border);
+                let r = to_rect(lay.bar);
+                FillRect(mem_dc, &r, bg_brush);
+                DeleteObject(bg_brush);
 
-                let empty_bar = RECT {
-                    left: bar_x,
-                    top: bar_y,
-                    right: bar_x + bar_w,
-                    bottom: bar_y + bar_h,
-                };
-                let eb_brush = CreateSolidBrush(CLR_BORDER);
-                FillRect(mem_dc, &empty_bar, eb_brush);
-                DeleteObject(eb_brush);
-
-                let fill_w = ((pct as f32 / 100.0) * bar_w as f32).round() as i32;
+                let fill_w = ((pct as f32 / 100.0) * lay.bar.w as f32).round() as i32;
                 if fill_w > 0 {
-                    let fill_bar = RECT {
-                        left: bar_x,
-                        top: bar_y,
-                        right: bar_x + fill_w.min(bar_w),
-                        bottom: bar_y + bar_h,
-                    };
-                    let fb_brush = CreateSolidBrush(level_clr);
-                    FillRect(mem_dc, &fill_bar, fb_brush);
-                    DeleteObject(fb_brush);
+                    let fg_brush = CreateSolidBrush(level_clr);
+                    let r = to_rect(Rect2::new(lay.bar.x, lay.bar.y, fill_w.min(lay.bar.w), lay.bar.h));
+                    FillRect(mem_dc, &r, fg_brush);
+                    DeleteObject(fg_brush);
                 }
 
-                // Close cross indicator on top right
-                SetTextColor(mem_dc, CLR_MUTED);
-                let mut c_rect = RECT {
-                    left: w - 22,
-                    top: 8,
-                    right: w - 6,
-                    bottom: 24,
-                };
-                draw_str(mem_dc, "✕", &mut c_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+                // 右上角关闭指示
+                SetTextColor(mem_dc, THEME.muted);
+                let mut r = to_rect(lay.close);
+                draw_str(mem_dc, "\u{2715}", &mut r, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
                 SelectObject(mem_dc, old_f);
                 DeleteObject(f_badge);
@@ -392,4 +410,56 @@ unsafe fn create_toast_font(size: i32, bold: bool) -> windows_sys::Win32::Graphi
         0,
         "Microsoft YaHei UI\0".encode_utf16().collect::<Vec<_>>().as_ptr(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lay() -> ToastLayout {
+        toast_layout(TOAST_WIDTH, TOAST_HEIGHT)
+    }
+
+    #[test]
+    fn window_size_is_four_aligned() {
+        assert_eq!(TOAST_WIDTH % 4, 0);
+        assert_eq!(TOAST_HEIGHT % 4, 0);
+    }
+
+    #[test]
+    fn everything_stays_inside_the_surface() {
+        let l = lay();
+        let s = l.surface;
+        for r in [l.accent, l.badge, l.title, l.close, l.message, l.bar] {
+            assert!(r.x >= s.x && r.right() <= s.right(), "horizontal overflow: {:?}", r);
+            assert!(r.y >= s.y && r.bottom() <= s.bottom(), "vertical overflow: {:?}", r);
+        }
+    }
+
+    #[test]
+    fn header_row_never_overlaps() {
+        let l = lay();
+        assert!(!l.badge.overlaps(&l.title), "badge overlaps title");
+        assert!(!l.title.overlaps(&l.close), "title overlaps close button");
+        assert!(!l.badge.overlaps(&l.close));
+        assert_eq!(l.title.x - l.badge.right(), METRICS.gap_tight);
+        assert_eq!(l.close.x - l.title.right(), METRICS.gap_tight);
+    }
+
+    #[test]
+    fn content_stacks_without_collisions() {
+        let l = lay();
+        assert!(!l.message.overlaps(&l.bar));
+        assert!(l.message.y >= l.badge.bottom());
+        assert!(l.bar.y >= l.message.bottom());
+        // 电量条下方留出底部留白
+        assert_eq!(TOAST_HEIGHT - l.bar.bottom(), PAD_BOTTOM);
+    }
+
+    #[test]
+    fn accent_bar_spans_full_height() {
+        let l = lay();
+        assert_eq!(l.accent.h, TOAST_HEIGHT);
+        assert!(l.badge.x > l.accent.right(), "text must clear the accent bar");
+    }
 }
