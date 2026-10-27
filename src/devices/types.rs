@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum DeviceKind {
+    #[default]
     Keyboard,
     Mouse,
     Keypad,
@@ -32,8 +33,9 @@ impl DeviceKind {
 }
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ConnectionMode {
+    #[default]
     Wireless24G,
     Wired,
     Bluetooth,
@@ -139,7 +141,7 @@ impl Default for BatteryState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeviceSnapshot {
     pub id: String,
     pub name: String,

@@ -197,7 +197,7 @@ pub fn lookup_corsair_name(pid: u16, hw_name: Option<&str>) -> String {
     }
 }
 
-pub fn classify_corsair(pid: u16, name: &str) -> DeviceKind {
+pub fn classify_corsair(_pid: u16, name: &str) -> DeviceKind {
     let lower = name.to_lowercase();
     if lower.contains("keyboard") || lower.contains("k70") || lower.contains("k100") || lower.contains("k57") {
         DeviceKind::Keyboard
