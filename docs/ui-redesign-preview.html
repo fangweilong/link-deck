@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>LinkDeck 设备监控页 · 网格瓦片（1:1 预览）</title>
+<style>
+  :root {
+    --bg:#141210; --header:#1E1A16; --card:#1C1815; --row:#171310; --border:#342C25;
+    --text:#F2EEE9; --muted:#A79E93; --accent:#E8802A;
+    --ok:#35C46A; --warn:#F0A32A; --danger:#EF5350; --charging:#25C9E8;
+    --btn:#2A231E; --btn_hover:#3A3028; --btn_text:#F2EEE9; --track:#2A231E;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: #0E0D0C;
+    color: #C9C4BE;
+    font: 13px/1.6 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  }
+  h1 { font-size: 15px; font-weight: 500; color: #EFEAE4; margin: 0 0 4px; }
+  .sub { font-size: 12px; color: #8A837D; margin: 0 0 16px; }
+  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+  .style-btn {
+    font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+    background: #1A1816; color: #C9C4BE; border: 1px solid #302B26;
+  }
+  .style-btn.on { border-color: var(--accent); color: #FFF; background: #262119; }
+  .stage { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+
+  .panel {
+    position: relative; width: 640px; height: 620px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  }
+  .panel > div { position: absolute; }
+  .hdr { left:0; top:0; width:640px; height:64px; background: var(--header); }
+  .t1 { left:24px; top:10px; font-size:18px; font-weight:700; color: var(--text); }
+  .t2 { left:24px; top:36px; font-size:12.5px; color: var(--muted); }
+  .tab {
+    height:32px; border-radius:6px; display:flex; align-items:center; justify-content:center;
+    font-size:12px; border:1px solid var(--border); background: var(--btn); color: var(--muted);
+  }
+  .tab.on { background: var(--btn_hover); border-color: var(--accent); color: var(--text); font-weight:700; }
+
+  .tile {
+    background: var(--card); border:1px solid var(--border); border-radius:12px;
+    width:288px; height:144px;
+  }
+  .tile.sel { border:2px solid var(--accent); }
+  .name { font-size:15px; font-weight:700; color: var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chip { font-size:11.5px; font-weight:700; text-align:right; }
+  .pct { font-size:30px; font-weight:700; line-height:1; display:flex; align-items:center; }
+  .barbg { background: var(--track); border-radius:6px; height:8px; }
+  .barfill { height:8px; border-radius:6px; }
+  .meta { font-size:11.5px; color: var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mb {
+    width:44px; height:22px; border-radius:6px; border:1px solid var(--border);
+    background: var(--btn); color: var(--muted); font-size:11.5px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .ftr { left:0; top:556px; width:640px; height:64px; background: var(--header); }
+  .abtn {
+    height:36px; border-radius:8px; border:1px solid var(--border); background: var(--btn);
+    color: var(--btn_text); font-size:13px; font-weight:700;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .status { font-size:12.5px; color: var(--muted); display:flex; align-items:center; }
+  .ver { font-size:12.5px; color: var(--muted); text-align:right; display:flex; align-items:center; justify-content:flex-end; }
+
+  table { border-collapse: collapse; font-size: 12px; }
+  td, th { padding: 4px 10px 4px 0; text-align: left; }
+  th { color: #8A837D; font-weight: 500; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; margin-right: 6px; vertical-align: -1px; border: 1px solid #3A352F; }
+</style>
+</head>
+<body>
+
+<h1>LinkDeck 设备监控页 · 网格瓦片</h1>
+<p class="sub">640 × 620，坐标与配色直接从 <code>src/ui/dashboard.rs</code> 与 <code>src/ui/theme.rs</code> 导出，1:1 像素还原。</p>
+
+<div class="bar" id="bar"></div>
+
+<div class="stage">
+  <div class="panel" id="panel">
+    <div class="hdr"></div>
+    <div class="t1">LinkDeck 外设控制中心</div>
+    <div class="t2">状态栏常驻 · 贴边悬浮球 · 2.4G/蓝牙多协议电量管理</div>
+    <div class="tab on" style="left:416px; top:16px; width:96px;">设备监控</div>
+    <div class="tab" style="left:520px; top:16px; width:96px;">偏好设置</div>
+
+    <div class="ftr"></div>
+    <div class="abtn" style="left:24px; top:570px; width:160px;">刷新设备</div>
+    <div class="abtn" style="left:196px; top:570px; width:130px;">偏好设置</div>
+    <div class="status" style="left:338px; top:576px; width:136px; height:24px;">上次刷新 12:04</div>
+    <div class="ver" style="left:486px; top:576px; width:130px; height:24px;">v0.6.0 (Rust)</div>
+  </div>
+
+  <div>
+    <table id="tokens"></table>
+  </div>
+</div>
+
+<script>
+const THEMES = {
+  ember: {label:'ember 暖橙', bg:'#141210',header:'#1E1A16',card:'#1C1815',row:'#171310',border:'#342C25',text:'#F2EEE9',muted:'#A79E93',accent:'#E8802A',ok:'#35C46A',warn:'#F0A32A',danger:'#EF5350',charging:'#25C9E8',btn:'#2A231E',btn_hover:'#3A3028',btn_text:'#F2EEE9',track:'#2A231E'},
+  graphite:{label:'graphite 冷岩',bg:'#121417',header:'#1A1E23',card:'#191C21',row:'#14171B',border:'#2C3138',text:'#E7EBF0',muted:'#98A2AE',accent:'#4C8DFF',ok:'#34D399',warn:'#FBBF24',danger:'#F87171',charging:'#22D3EE',btn:'#22262C',btn_hover:'#2E343C',btn_text:'#E7EBF0',track:'#22262C'},
+  aurora:{label:'aurora 极光',bg:'#11121B',header:'#191B29',card:'#181A27',row:'#14151F',border:'#2E3148',text:'#EAEAF6',muted:'#9C9DBA',accent:'#9C6BFF',ok:'#4ADE80',warn:'#FBBF24',danger:'#FB7185',charging:'#2DD4BF',btn:'#23253A',btn_hover:'#2F3250',btn_text:'#EAEAF6',track:'#23253A'},
+  jade:{label:'jade 竹青',bg:'#101512',header:'#17201B',card:'#161E19',row:'#121814',border:'#28362E',text:'#E5EFE7',muted:'#93A797',accent:'#34C77B',ok:'#4ADE80',warn:'#F5C542',danger:'#EF5350',charging:'#22D3EE',btn:'#1E2822',btn_hover:'#29362D',btn_text:'#E5EFE7',track:'#1E2822'},
+  snow:{label:'snow 雪原',bg:'#F4F6F8',header:'#FFFFFF',card:'#FFFFFF',row:'#F0F2F5',border:'#DFE4EA',text:'#14181D',muted:'#66707C',accent:'#E07030',ok:'#16A34A',warn:'#D97706',danger:'#DC2626',charging:'#0891B2',btn:'#F0F2F5',btn_hover:'#E4E8ED',btn_text:'#14181D',track:'#E4E8ED'}
+};
+
+const GEOM = {
+  cols: 2, tile_w: 288, tile_h: 144, step: 160,
+  x: [24, 328], y: [72, 232],
+  pad: 16, chip_w: 48, btn_w: 44, btn_h: 22,
+  off_name: 16, h_name: 20,
+  off_pct: 40,  h_pct: 40,
+  off_bar: 88,  h_bar: 8,
+  off_meta: 104, h_meta: 24,
+  off_btn: 106
+};
+
+const DEVICES = [
+  {icon:'⌨', name:'MX Keys', pct:78, state:'ok',    chip:'良好',   meta:'蓝牙 · 3.842 V', sel:true},
+  {icon:'🖱', name:'MCHOSE M7', pct:32, state:'warn',  chip:'偏低',   meta:'2.4G · 3.512 V', sel:false},
+  {icon:'🎧', name:'AirPods Max', pct:100, state:'charging', chip:'充电中', meta:'蓝牙 · 4.102 V', sel:false},
+  {icon:'🎮', name:'Xbox 手柄', pct:8, state:'danger', chip:'需充电', meta:'2.4G · 3.301 V', sel:false}
+];
+
+const TOKEN_ROWS = [
+  ['bg','窗口底色'],['header','顶栏 / 底栏'],['card','瓦片底'],['row','次级底'],['border','描边'],
+  ['text','主文字'],['muted','次级文字'],['accent','强调色'],
+  ['ok','电量 ≥ 50'],['warn','20 ≤ 电量 < 50'],['danger','电量 < 20'],['charging','充电中'],
+  ['btn','按钮底'],['btn_hover','按钮 hover'],['track','电量条底槽']
+];
+
+function buildTiles() {
+  const p = document.getElementById('panel');
+  p.querySelectorAll('.tile, .tilepart').forEach(e => e.remove());
+  const inner = GEOM.tile_w - GEOM.pad * 2;
+  DEVICES.forEach((d, i) => {
+    const col = i % GEOM.cols, row = Math.floor(i / GEOM.cols);
+    const tx = GEOM.x[col], ty = GEOM.y[row];
+    const t = document.createElement('div');
+    t.className = 'tile' + (d.sel ? ' sel' : '');
+    t.style.left = tx + 'px'; t.style.top = ty + 'px';
+    p.appendChild(t);
+
+    const add = (cls, x, y, w, h, html, extra) => {
+      const e = document.createElement('div');
+      e.className = 'tilepart ' + cls;
+      e.style.left = x + 'px'; e.style.top = y + 'px';
+      if (w) e.style.width = w + 'px';
+      if (h) e.style.height = h + 'px';
+      if (html) e.innerHTML = html;
+      if (extra) Object.assign(e.style, extra);
+      p.appendChild(e);
+      return e;
+    };
+    const c = 'var(--' + d.state + ')';
+    add('name', tx + GEOM.pad, ty + GEOM.off_name, inner - GEOM.chip_w - 8, GEOM.h_name, d.icon + ' ' + d.name);
+    add('chip', tx + GEOM.tile_w - GEOM.pad - GEOM.chip_w, ty + GEOM.off_name, GEOM.chip_w, GEOM.h_name, d.chip, {color: c});
+    add('pct', tx + GEOM.pad, ty + GEOM.off_pct, inner, GEOM.h_pct, d.pct + '%', {color: c});
+    const bx = tx + GEOM.pad, by = ty + GEOM.off_bar;
+    add('barbg', bx, by, inner, GEOM.h_bar, '');
+    const fw = Math.round(inner * d.pct / 100);
+    if (fw > 0) add('barfill', bx, by, fw, GEOM.h_bar, '', {background: c});
+    add('meta', tx + GEOM.pad, ty + GEOM.off_meta, inner - GEOM.btn_w * 2 - 8 - 12, GEOM.h_meta, d.meta);
+    add('mb', tx + GEOM.tile_w - GEOM.pad - GEOM.btn_w - 8 - GEOM.btn_w, ty + GEOM.off_btn, GEOM.btn_w, GEOM.btn_h, '复制');
+    add('mb', tx + GEOM.tile_w - GEOM.pad - GEOM.btn_w, ty + GEOM.off_btn, GEOM.btn_w, GEOM.btn_h, '改名');
+  });
+}
+
+function applyTheme(key) {
+  const t = THEMES[key];
+  const r = document.documentElement.style;
+  for (const k of ['bg','header','card','row','border','text','muted','accent','ok','warn','danger','charging','btn','btn_hover','btn_text','track']) {
+    r.setProperty('--' + k, t[k]);
+  }
+  document.querySelectorAll('.style-btn').forEach(b => b.classList.toggle('on', b.dataset.k === key));
+  const tb = document.getElementById('tokens');
+  tb.innerHTML = '<tr><th>令牌</th><th>' + t.label + '</th></tr>' +
+    TOKEN_ROWS.map(([k, label]) => '<tr><td><span class="sw" style="background:var(--' + k + ')"></span>' + label + '</td><td>' + t[k] + '</td></tr>').join('');
+}
+
+const bar = document.getElementById('bar');
+Object.keys(THEMES).forEach(k => {
+  const b = document.createElement('button');
+  b.className = 'style-btn'; b.dataset.k = k; b.textContent = THEMES[k].label;
+  b.onclick = () => applyTheme(k);
+  bar.appendChild(b);
+});
+
+buildTiles();
+applyTheme('ember');
+</script>
+</body>
+</html>

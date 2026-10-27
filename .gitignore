@@ -19,3 +19,6 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# 本地实拍截图（tools/shot_settings.py 的输出，只用于人工比对）
+/.shots/
