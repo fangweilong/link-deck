@@ -229,9 +229,14 @@ pub(crate) unsafe fn dispatch_settings_click(hwnd: HWND, host: HWND, id: i32) {
             }
             windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 0);
         }
-        141 => send_cmd(crate::ui::tray::IDM_CHECK_UPDATE),
+        141 => {
+            if !crate::update::snapshot().checking {
+                send_cmd(crate::ui::tray::IDM_CHECK_UPDATE);
+            }
+        }
         142 => {
-            if crate::update::has_update() {
+            let snap = crate::update::snapshot();
+            if crate::update::has_update() && !snap.applying {
                 send_cmd(crate::ui::tray::IDM_APPLY_UPDATE);
             }
         }

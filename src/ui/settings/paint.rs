@@ -177,6 +177,8 @@ unsafe fn paint_pill(hdc: HDC, p: &PillBox, hover: bool, font_scale: f32, sy: i3
             let (bg, edge, fg) = match (p.kind, on, hover) {
                 (PillKind::Toggle, true, true) => (THEME.accent_strong, THEME.accent_strong, THEME.accent_text),
                 (PillKind::Toggle, true, false) => (THEME.accent, THEME.accent, THEME.accent_text),
+                (PillKind::Action, _, true) => (THEME.accent_strong, THEME.accent_strong, THEME.accent_text),
+                (PillKind::Action, _, false) => (THEME.accent, THEME.accent, THEME.accent_text),
                 (PillKind::Value, _, _) => (THEME.btn, THEME.accent, THEME.accent),
                 (PillKind::Step, _, true) => (THEME.btn_active, THEME.accent, THEME.text),
                 (PillKind::Step, _, false) => (THEME.btn, THEME.border, THEME.text),
@@ -194,7 +196,8 @@ unsafe fn paint_pill(hdc: HDC, p: &PillBox, hover: bool, font_scale: f32, sy: i3
             SelectObject(hdc, op);
             DeleteObject(pen);
 
-            let f = create_clear_font((12.5 * font_scale).round() as i32, on || hover);
+            let bold = on || hover || matches!(p.kind, PillKind::Action);
+            let f = create_clear_font((12.5 * font_scale).round() as i32, bold);
             let old = SelectObject(hdc, f);
             SetTextColor(hdc, fg);
             let mut r = RECT {

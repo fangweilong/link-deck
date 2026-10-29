@@ -210,7 +210,11 @@ fn build_specs(ball_enabled: bool, auto_start: bool) -> Vec<MenuSpec> {
 
     v.push(separator(1));
     let update = crate::update::snapshot();
-    if crate::update::has_update() {
+    if update.applying {
+        let mut s = item(IDM_APPLY_UPDATE, "正在下载并升级…", MenuKind::Action);
+        s.dim = true;
+        v.push(s);
+    } else if crate::update::has_update() {
         let latest = update.latest.clone().unwrap_or_default();
         v.push(item(IDM_APPLY_UPDATE, format!("立即升级到 v{}", latest), MenuKind::Action));
     } else if update.checking {

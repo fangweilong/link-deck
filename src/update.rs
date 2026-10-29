@@ -230,20 +230,22 @@ pub fn download_latest() -> Result<PathBuf, String> {
     fs::create_dir_all(&dir).map_err(|e| format!("创建更新目录失败: {}", e))?;
     let dest = dir.join(format!("LinkDeck-{}.exe", version));
 
-    with_state(|s| {
-        s.applying = true;
-        s.error = None;
-    });
+    log_update(&format!("开始下载版本 v{}: {}", version, url));
     let result = download_to(&url, &dest);
-    with_state(|s| {
-        s.applying = false;
-        match &result {
-            Ok(_) => {
+    match &result {
+        Ok(bytes) => {
+            log_update(&format!("下载完成，共 {} 字节", bytes));
+            with_state(|s| {
                 s.downloaded = Some(dest.clone());
-            }
-            Err(e) => s.error = Some(e.clone()),
+            });
         }
-    });
+        Err(e) => {
+            log_update(&format!("下载失败: {}", e));
+            with_state(|s| {
+                s.error = Some(e.clone());
+            });
+        }
+    }
     result.map(|_| dest)
 }
 
@@ -451,7 +453,16 @@ pub fn spawn_auto_checker(enabled: bool, notify: impl Fn() + Send + 'static) {
 
 /// 手动检查（不阻塞 UI）
 pub fn spawn_check(notify: impl Fn() + Send + 'static) {
-    if with_state(|s| s.checking) {
+    let already_checking = with_state(|s| {
+        if s.checking {
+            true
+        } else {
+            s.checking = true;
+            s.error = None;
+            false
+        }
+    });
+    if already_checking {
         return;
     }
     std::thread::spawn(move || {
@@ -462,13 +473,25 @@ pub fn spawn_check(notify: impl Fn() + Send + 'static) {
 
 /// 手动下载并升级（不阻塞 UI）
 pub fn spawn_apply(notify: impl Fn() + Send + 'static) {
-    if with_state(|s| s.applying) {
+    let already_applying = with_state(|s| {
+        if s.applying {
+            true
+        } else {
+            s.applying = true;
+            s.error = None;
+            false
+        }
+    });
+    if already_applying {
         return;
     }
     std::thread::spawn(move || {
         let result = download_latest().and_then(|p| apply_and_restart(&p));
         if let Err(e) = result {
-            with_state(|s| s.error = Some(e));
+            with_state(|s| {
+                s.applying = false;
+                s.error = Some(e);
+            });
         }
         notify();
     });

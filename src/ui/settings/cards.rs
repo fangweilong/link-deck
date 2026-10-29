@@ -19,6 +19,11 @@ fn pill_of(
 fn value(label: impl Into<String>, w: i32) -> Pill {
     pill_of(label, 0, true, w, PillKind::Value, 0)
 }
+/// 强调按钮（触发动作，填充强调色）
+fn action(label: impl Into<String>, id: i32, w: i32) -> Pill {
+    pill_of(label, id, false, w, PillKind::Action, 0)
+}
+
 
 /// 开关项：开 / 关两种状态，开启时整块填强调色
 fn toggle(label: impl Into<String>, id: i32, on: bool, w: i32) -> Pill {
@@ -299,6 +304,7 @@ fn poll_card(ctx: &Ctx) -> Card {
 // ---- 4 系统 ----
 
 fn update_card(ctx: &Ctx) -> Card {
+    let check_label = if ctx.update_checking { "正在检查…" } else { "立即检查" };
     let mut pills = vec![
         toggle(
             if ctx.auto_update { "● 自动检查更新" } else { "○ 自动检查更新" },
@@ -306,11 +312,13 @@ fn update_card(ctx: &Ctx) -> Card {
             ctx.auto_update,
             190,
         ),
-        pill("立即检查", 141, false, 110),
+        pill(check_label, 141, false, 110),
     ];
-    if ctx.update_available {
+    if ctx.update_applying {
+        pills.push(value("正在下载并升级…", 160));
+    } else if ctx.update_available {
         if let Some(latest) = ctx.latest_version.as_deref() {
-            pills.push(value(format!("升级到 v{}", latest), 160));
+            pills.push(action(format!("升级到 v{}", latest), 142, 160));
         }
     }
     Card {

@@ -100,7 +100,7 @@ pub(crate) fn update_status_line(state: &crate::update::UpdateState) -> String {
         return "正在检查 GitHub Releases…".to_string();
     }
     if let Some(err) = &state.error {
-        return format!("检查失败: {}（当前 v{}）", err, current);
+        return format!("更新失败: {}（当前 v{}）", err, current);
     }
     match state.latest.as_deref() {
         Some(latest) if crate::update::is_newer(latest, current) => format!(
@@ -178,6 +178,8 @@ pub(crate) fn settings_ctx(state: &PanelStateData) -> settings::Ctx {
         auto_start: state.auto_start,
         update_line: update_status_line(&upd),
         update_available: latest.is_some(),
+        update_applying: upd.applying,
+        update_checking: upd.checking,
         latest_version: latest,
         config_path: crate::config::AppConfig::config_path().display().to_string(),
     }
@@ -210,6 +212,8 @@ pub(crate) fn fallback_settings_ctx() -> settings::Ctx {
         auto_start: false,
         update_line: "当前版本 · 可手动检查更新".to_string(),
         update_available: false,
+        update_applying: false,
+        update_checking: false,
         latest_version: None,
         config_path: crate::config::AppConfig::config_path().display().to_string(),
     }

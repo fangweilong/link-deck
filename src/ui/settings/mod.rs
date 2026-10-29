@@ -89,6 +89,8 @@ pub struct Ctx {
     pub auto_start: bool,
     pub update_line: String,
     pub update_available: bool,
+    pub update_applying: bool,
+    pub update_checking: bool,
     pub latest_version: Option<String>,
     pub config_path: String,
 }
@@ -109,12 +111,14 @@ impl Box2 {
 
 /// 控件的视觉语义。三者长得一样时用户分不清“开关”和“单选”，
 /// 这里按语义分派配色与文字对齐。
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PillKind {
     /// 单选：选中项描边
     Choice,
     /// 开关：开则整块填强调色
     Toggle,
+    /// 强调按钮：强调色填充
+    Action,
     /// 数值：只读展示（`id == 0`，点不到）
     Value,
     /// 步进按钮：− / +
@@ -323,6 +327,8 @@ mod tests {
             auto_start: false,
             update_line: "已是最新版本".into(),
             update_available: false,
+            update_applying: false,
+            update_checking: false,
             latest_version: None,
             config_path: "C:/tmp/config.json".into(),
         }
@@ -615,5 +621,37 @@ mod tests {
 
         // 滚动到可视区后，同一个控件应当可以点到（内容 y=406 → 屏幕 view_top + 306）
         assert_eq!(hit_test_at(&page, 20, view_top + 306, 100, view_top, view_h), Some(777));
+    }
+
+    #[test]
+    fn update_card_upgrade_button_is_action_and_clickable() {
+        let mut ctx = test_ctx();
+        ctx.active_group = 4; // 系统
+        ctx.update_available = true;
+        ctx.latest_version = Some("0.8.0".into());
+
+        let page = layout(&ctx, 640);
+        let pills = all_pills(&page);
+        let upgrade_btn = pills.iter().find(|p| p.label == "升级到 v0.8.0")
+            .expect("必须包含升级按钮");
+
+        assert_eq!(upgrade_btn.id, 142, "升级按钮 ID 必须为 142");
+        assert_eq!(upgrade_btn.kind, PillKind::Action, "升级按钮类型必须为 Action");
+
+        // 验证命中测试
+        let hit = hit_test(&page, upgrade_btn.rect.x + 10, upgrade_btn.rect.y + 10);
+        assert_eq!(hit, Some(142), "点击升级按钮区域必须命中 ID 142");
+
+        // 升级中状态
+        let mut applying_ctx = ctx.clone();
+        applying_ctx.update_applying = true;
+        let applying_page = layout(&applying_ctx, 640);
+        let applying_pills = all_pills(&applying_page);
+        let applying_btn = applying_pills.iter().find(|p| p.label == "正在下载并升级…")
+            .expect("必须展示升级中提示按钮");
+        assert_eq!(applying_btn.id, 0);
+        assert_eq!(applying_btn.kind, PillKind::Value);
+        let applying_hit = hit_test(&applying_page, applying_btn.rect.x + 10, applying_btn.rect.y + 10);
+        assert_eq!(applying_hit, None, "升级中按钮不可点击");
     }
 }
